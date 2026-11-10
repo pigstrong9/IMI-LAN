@@ -13,7 +13,7 @@ try {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
 } catch {}
 </script>
-<link rel="stylesheet" href="style.css?v=20261110x">
+<link rel="stylesheet" href="style.css?v=20261110y">
 </head>
 <body>
 
@@ -112,6 +112,10 @@ try {
   <symbol id="i-pip" viewBox="0 0 24 24">
     <rect x="3.5" y="5" width="17" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
     <rect x="12" y="11" width="6" height="5.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  </symbol>
+  <symbol id="i-zoom" viewBox="0 0 24 24">
+    <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <path d="M15 15l5 5M8 10.5h5M10.5 8v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
   </symbol>
   <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5l10 6.5-10 6.5v-13Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
@@ -232,6 +236,7 @@ try {
       <button class="icon-btn" id="btnViewerShot" title="截图" aria-label="截图"><svg class="ic"><use href="#i-shot"/></svg></button>
       <button class="icon-btn" id="btnViewerRec" title="录制" aria-label="录制"><svg class="ic"><use href="#i-record"/></svg></button>
       <button class="icon-btn" id="btnViewerPip" title="画中画" aria-label="画中画"><svg class="ic"><use href="#i-pip"/></svg></button>
+      <button class="icon-btn" id="btnViewerZoom" title="缩放/平移" aria-label="缩放/平移"><svg class="ic"><use href="#i-zoom"/></svg></button>
       <button class="quality-btn" id="btnViewerQuality" title="画质">画质</button>
       <button class="icon-btn" id="btnViewerClose" title="关闭" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
     </div>
@@ -419,6 +424,6 @@ try {
 <div class="toast" id="toast"></div>
 
 <script type="module" src="video-stream.js?v=20261110h"></script>
-<script type="module" src="app.js?v=20261110x"></script>
+<script type="module" src="app.js?v=20261110y"></script>
 </body>
 </html>

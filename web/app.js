@@ -752,6 +752,159 @@ function regionName(region) {
 /* camera cards                                                        */
 /* ------------------------------------------------------------------ */
 
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+
+// 画面缩放/平移：滚轮或 HUD 缩放，拖动平移，双击复位
+function createZoom(surface, { onChange } = {}) {
+  if (surface._zoom) return surface._zoom;
+
+  const st = { enabled: false, scale: 1, tx: 0, ty: 0, dragging: false, pointerId: null, sx: 0, sy: 0, stx: 0, sty: 0 };
+  const hud = document.createElement('div');
+  hud.className = 'zoom-hud';
+  hud.innerHTML = '<button type="button" data-zoom="-" aria-label="缩小">−</button>'
+    + '<button type="button" data-zoom="reset" aria-label="复位">100%</button>'
+    + '<button type="button" data-zoom="+" aria-label="放大">+</button>';
+  surface.appendChild(hud);
+  const level = hud.querySelector('[data-zoom="reset"]');
+  const host = () => surface.querySelector('video-stream') || surface.querySelector('video');
+
+  function apply() {
+    if (st.scale === 1) { st.tx = 0; st.ty = 0; }
+    const el = host();
+    if (el) {
+      el.style.transformOrigin = 'center center';
+      el.style.transform = st.scale === 1 && !st.tx && !st.ty
+        ? ''
+        : `translate(${st.tx}px, ${st.ty}px) scale(${st.scale})`;
+    }
+    level.textContent = Math.round(st.scale * 100) + '%';
+    level.classList.toggle('at-fit', st.scale === 1);
+  }
+
+  function clamp() {
+    const r = surface.getBoundingClientRect();
+    const maxX = Math.max(0, (st.scale - 1) * r.width / 2);
+    const maxY = Math.max(0, (st.scale - 1) * r.height / 2);
+    st.tx = Math.min(maxX, Math.max(-maxX, st.tx));
+    st.ty = Math.min(maxY, Math.max(-maxY, st.ty));
+  }
+
+  function reset() {
+    st.scale = 1;
+    st.tx = 0;
+    st.ty = 0;
+    apply();
+  }
+
+  function zoomAt(factor, clientX, clientY) {
+    const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.scale * factor));
+    if (Math.abs(next - st.scale) < 0.001) return;
+    const r = surface.getBoundingClientRect();
+    const dx = clientX - r.left - r.width / 2;
+    const dy = clientY - r.top - r.height / 2;
+    const k = next / st.scale;
+    st.tx = dx - (dx - st.tx) * k;
+    st.ty = dy - (dy - st.ty) * k;
+    st.scale = next;
+    clamp();
+    apply();
+  }
+
+  function setEnabled(on) {
+    on = !!on;
+    if (st.enabled === on) {
+      if (!on) reset();
+      return;
+    }
+    st.enabled = on;
+    surface.classList.toggle('zoom-on', on);
+    hud.classList.toggle('on', on);
+    reset();
+    onChange?.(on);
+  }
+
+  const onWheel = ev => {
+    if (!st.enabled) return;
+    ev.preventDefault();
+    zoomAt(ev.deltaY < 0 ? 1.18 : 1 / 1.18, ev.clientX, ev.clientY);
+  };
+  const onDown = ev => {
+    if (!st.enabled || ev.button !== 0) return;
+    if (ev.target.closest('button, .zoom-hud, .card-tools, .card-menu-btn, [data-act], .mask-btn')) return;
+    st.dragging = true;
+    st.pointerId = ev.pointerId;
+    st.sx = ev.clientX;
+    st.sy = ev.clientY;
+    st.stx = st.tx;
+    st.sty = st.ty;
+    surface.classList.add('zoom-drag');
+    try { surface.setPointerCapture(ev.pointerId); } catch {}
+    ev.preventDefault();
+  };
+  const onMove = ev => {
+    if (!st.dragging || ev.pointerId !== st.pointerId) return;
+    st.tx = st.stx + ev.clientX - st.sx;
+    st.ty = st.sty + ev.clientY - st.sy;
+    clamp();
+    apply();
+  };
+  const onUp = ev => {
+    if (!st.dragging || ev.pointerId !== st.pointerId) return;
+    st.dragging = false;
+    surface.classList.remove('zoom-drag');
+    try { surface.releasePointerCapture(ev.pointerId); } catch {}
+  };
+  const onDbl = ev => {
+    if (!st.enabled || ev.target.closest('button, .card-tools, .zoom-hud')) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    reset();
+  };
+  const onHud = ev => {
+    const btn = ev.target.closest('[data-zoom]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const r = surface.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    if (btn.dataset.zoom === '+') zoomAt(1.25, cx, cy);
+    else if (btn.dataset.zoom === '-') zoomAt(1 / 1.25, cx, cy);
+    else reset();
+  };
+
+  surface.addEventListener('wheel', onWheel, { passive: false });
+  surface.addEventListener('pointerdown', onDown);
+  surface.addEventListener('pointermove', onMove);
+  surface.addEventListener('pointerup', onUp);
+  surface.addEventListener('pointercancel', onUp);
+  surface.addEventListener('dblclick', onDbl, true);
+  hud.addEventListener('click', onHud);
+
+  const api = {
+    setEnabled,
+    reset,
+    toggle: () => setEnabled(!st.enabled),
+    get enabled() { return st.enabled; },
+    destroy() {
+      setEnabled(false);
+      surface.removeEventListener('wheel', onWheel);
+      surface.removeEventListener('pointerdown', onDown);
+      surface.removeEventListener('pointermove', onMove);
+      surface.removeEventListener('pointerup', onUp);
+      surface.removeEventListener('pointercancel', onUp);
+      surface.removeEventListener('dblclick', onDbl, true);
+      hud.removeEventListener('click', onHud);
+      hud.remove();
+      delete surface._zoom;
+    },
+  };
+  surface._zoom = api;
+  apply();
+  return api;
+}
+
 function createCard(name, delay = 0) {
   const { meta, model, ip } = streamInfo(name);
   const title = displayCameraName(name);
@@ -788,6 +941,7 @@ function createCard(name, delay = 0) {
         <button class="tool" data-act="shot" title="截图">${icon('i-shot')}</button>
         <button class="tool" data-act="hold" title="暂停加载">${icon('i-pause')}</button>
         <button class="tool quality-tool" data-act="quality" title="切换画质"><span data-quality-label>${qualityLabel}</span></button>
+        <button class="tool" data-act="zoom" title="缩放/平移">${icon('i-zoom')}</button>
         <button class="tool" data-act="open" title="全屏">${icon('i-expand')}</button>
         <button class="tool del" data-act="del" title="删除">${icon('i-trash')}</button>
       </div>
@@ -803,6 +957,9 @@ function createCard(name, delay = 0) {
   `;
 
   const media = $('.card-media', card);
+  createZoom(media, {
+    onChange: on => $('[data-act="zoom"]', card)?.classList.toggle('on', on),
+  });
   const mask = $('[data-role="mask"]', card);
   const badge = $('[data-role="badge"]', card);
   const signal = $('[data-role="signal"]', card);
@@ -973,6 +1130,7 @@ function createCard(name, delay = 0) {
   }
 
   function unmount() {
+    media._zoom?.setEnabled(false);
     clearInterval(timer);
     clearTimeout(mountTimer);
     clearTimeout(errorTimer);
@@ -1094,6 +1252,8 @@ function createCard(name, delay = 0) {
       else suspend();
     } else if (act === 'quality') {
       cycleQuality(name);
+    } else if (act === 'zoom') {
+      media._zoom?.toggle();
     } else if (act === 'resume') {
       resumeStream();
     } else if (act === 'open') {
@@ -1345,6 +1505,7 @@ function openViewer(name) {
   const live = !!state.cards.get(name)?.isLive?.();
 
   const stage = $('#viewerStage');
+  stage._zoom?.destroy();
   stage.innerHTML = '';
 
   const cardVideo = state.cards.get(name)?.player?.video;
@@ -1378,6 +1539,9 @@ function openViewer(name) {
   state.viewer = viewer;
   holdCardsForViewer();
   stage.appendChild(player.el);
+  viewer.zoom = createZoom(stage, {
+    onChange: on => $('#btnViewerZoom')?.classList.toggle('on', on),
+  });
 
   $('#viewerName').textContent = title;
   $('#viewerModel').textContent = shortModel(meta.model || '');
@@ -1407,6 +1571,8 @@ function closeViewer() {
   }
 
   if (viewer.player) viewer.player.destroy();
+  viewer.zoom?.destroy();
+  viewer.zoom = null;
   state.viewer = null;
 
   $('#viewerStage').innerHTML = '';
@@ -1428,6 +1594,8 @@ function recreateViewerPlayer({ microphone } = {}) {
   const wasMuted = v ? v.muted : state.muted;
 
   viewer.player.destroy();
+  viewer.zoom?.destroy();
+  viewer.zoom = null;
   const player = makePlayer(viewer.name, {
     contain: state.settings.display === 'ratio',
     muted: wasMuted,
@@ -1438,6 +1606,9 @@ function recreateViewerPlayer({ microphone } = {}) {
   viewer.muted = wasMuted;
   $('#viewerStage').innerHTML = '';
   $('#viewerStage').appendChild(player.el);
+  viewer.zoom = createZoom($('#viewerStage'), {
+    onChange: on => $('#btnViewerZoom')?.classList.toggle('on', on),
+  });
   $('#btnViewerMute').innerHTML = icon(wasMuted ? 'i-muted' : 'i-volume');
   $('#btnViewerMute').classList.toggle('on', !wasMuted);
 }
@@ -2412,6 +2583,7 @@ function bindEvents() {
   // viewer
   $('#btnViewerClose').addEventListener('click', closeViewer);
   $('#btnViewerMute').addEventListener('click', toggleViewerMute);
+  $('#btnViewerZoom').addEventListener('click', () => state.viewer?.zoom?.toggle());
 
   $('#btnViewerShot').addEventListener('click', () => {
     const viewer = state.viewer;

@@ -429,10 +429,52 @@ body.wall .grid { grid-template-rows: none !important; }
   position: relative;
   aspect-ratio: 16 / 9;
   background: #04080d;
+  overflow: hidden;
 }
 .card-media video-stream { display: block; width: 100%; height: 100%; }
 .card-media video { width: 100%; height: 100%; object-fit: cover; background: #04080d; display: block; }
 .card-media video-stream .info { display: none; }
+
+/* 画面缩放/平移 */
+.card-media.zoom-on, .viewer-stage.zoom-on { cursor: grab; }
+.card-media.zoom-on.zoom-drag, .viewer-stage.zoom-on.zoom-drag { cursor: grabbing; }
+.card-media.zoom-on .card-tools, .card-media.zoom-on .card-tools *,
+.card-media.zoom-on .card-menu-btn, .card-media.zoom-on .hero-expand { cursor: pointer; }
+.zoom-hud {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 9;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 14, 20, 0.72);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+.zoom-hud.on { display: flex; }
+.zoom-hud button {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #e7f0f8;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.zoom-hud button:hover { background: rgba(255, 255, 255, 0.12); }
+.zoom-hud button[data-zoom="reset"] { min-width: 42px; font: 9.5px var(--mono); color: rgba(255, 255, 255, 0.82); }
+.zoom-hud button[data-zoom="reset"].at-fit { color: rgba(255, 255, 255, 0.45); }
+.viewer-stage { overflow: hidden; }
+.viewer-stage .zoom-hud { top: 76px; right: 18px; padding: 4px; }
 
 .card-mask {
   position: absolute;
