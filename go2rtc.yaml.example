@@ -1,0 +1,24 @@
+api:
+  listen: "127.0.0.1:1984"
+  static_dir: "web"
+
+rtsp:
+  listen: "127.0.0.1:8554"
+
+webrtc:
+  listen: "127.0.0.1:8555"
+
+log:
+  level: info
+
+ffmpeg:
+  bin: "./bin/ffmpeg.exe"
+
+# 登录令牌：扫码或密码登录成功后，由 qr-login.js 写入「小米账号 ID -> passToken」。
+# 这一行必须独占一行、后面不接任何值，qr-login.js 才能识别并写进来。
+xiaomi:
+
+# 摄像头流地址由网页里的「添加摄像头」写入，形如：
+#   cam_1000000001:
+#     - xiaomi://100000000:cn@192.0.2.10?did=1000000001&model=chuangmi.camera.029a02&subtype=2
+streams:

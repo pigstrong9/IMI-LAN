@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>米家监控 · 局域网直连</title>
+<link rel="stylesheet" href="style.css?v=20261110g">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">◉</div>
+    <div>
+      <h1>米家监控</h1>
+      <p>局域网直连 · 低延迟</p>
+    </div>
+  </div>
+
+  <div class="engine" id="engine">
+    <span class="dot"></span>
+    <span id="engineText">正在连接引擎…</span>
+  </div>
+
+  <div class="single-nav" id="singleNav" hidden>
+    <button class="btn ghost" id="btnSinglePrev" title="上一路">‹</button>
+    <select id="singleSelect" title="选择摄像头"></select>
+    <button class="btn ghost" id="btnSingleNext" title="下一路">›</button>
+  </div>
+
+  <div class="top-actions">
+    <button class="btn ghost" id="btnRefresh" title="刷新">↻</button>
+    <button class="btn ghost" id="btnWall" title="全屏拼接（Esc 退出）">⛶</button>
+    <button class="btn ghost" id="btnMuteAll" title="全部静音/取消静音">🔇</button>
+    <button class="btn primary" id="btnAdd">＋ 添加摄像头</button>
+    <button class="btn ghost" id="btnSettings" title="设置">⚙</button>
+  </div>
+</header>
+
+<main>
+  <div class="empty" id="empty">
+    <div class="empty-icon">📷</div>
+    <h2>还没有添加摄像头</h2>
+    <p>使用小米账号登录后，会自动读取米家设备列表。<br>视频只在本机与摄像头之间通过局域网传输。</p>
+    <button class="btn primary big" id="btnAddEmpty">登录并添加摄像头</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</main>
+
+<footer class="footer">
+  <span>go2rtc <b id="engineVersion">—</b></span>
+  <span id="streamCount">0 路视频</span>
+  <span class="hint">视频流仅监听 127.0.0.1，不会暴露到局域网</span>
+</footer>
+
+<!-- 登录 / 添加摄像头 -->
+<div class="modal" id="modalLogin" aria-hidden="true">
+  <div class="modal-card">
+    <button class="modal-close" data-close="modalLogin">✕</button>
+
+    <div class="steps">
+      <div class="step" data-step="login">
+        <h2>登录小米账号</h2>
+        <p class="muted">推荐用米家 App 扫码，不需要输入账号密码；二维码只在本机生成，登录令牌保存在本机。</p>
+
+        <div class="login-tabs">
+          <button type="button" class="login-tab on" data-login-tab="qr">二维码登录</button>
+          <button type="button" class="login-tab" data-login-tab="pwd">账号密码</button>
+        </div>
+
+        <div class="login-pane" data-login-pane="qr">
+          <div class="qr-frame"><img id="qrImg" alt="米家登录二维码" hidden></div>
+          <div class="qr-status" id="qrStatus">正在获取二维码…</div>
+          <div class="qr-actions">
+            <button type="button" class="btn ghost small" id="btnQrRefresh">刷新二维码</button>
+          </div>
+          <p class="muted small qr-tip">手机米家 App → 右上角「＋」→「扫一扫」，确认后引擎会自动重启（视频断开约 1–2 秒）。</p>
+        </div>
+
+        <div class="login-pane" data-login-pane="pwd" hidden>
+          <form id="formLogin" class="form">
+            <label>小米账号
+              <input type="text" name="username" autocomplete="username" placeholder="手机号 / 邮箱 / 小米 ID" required>
+            </label>
+            <label>密码
+              <input type="password" name="password" autocomplete="current-password" placeholder="密码" required>
+            </label>
+            <div class="form-status" id="loginStatus"></div>
+            <button class="btn primary wide" type="submit">登录</button>
+          </form>
+        </div>
+
+        <div class="region-field">
+          <label for="loginRegion">账号区域</label>
+          <select id="loginRegion">
+            <option value="cn">中国大陆</option>
+            <option value="de">欧洲</option>
+            <option value="i2">印度</option>
+            <option value="ru">俄罗斯</option>
+            <option value="sg">新加坡</option>
+            <option value="us">美国</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="step" data-step="captcha">
+        <h2>需要验证码</h2>
+        <p class="muted">请输入图片中的字符。</p>
+        <form id="formCaptcha" class="form">
+          <img id="captchaImg" class="captcha" alt="验证码">
+          <label>验证码
+            <input type="text" name="captcha" autocomplete="off" placeholder="输入图片中的字符" required>
+          </label>
+          <div class="form-status" id="captchaStatus"></div>
+          <button class="btn primary wide" type="submit">继续</button>
+        </form>
+      </div>
+
+      <div class="step" data-step="verify">
+        <h2>安全验证</h2>
+        <p class="muted" id="verifyTip">请输入发送到你手机或邮箱的验证码。</p>
+        <form id="formVerify" class="form">
+          <label>验证码
+            <input type="text" name="verify" inputmode="numeric" autocomplete="one-time-code" placeholder="验证码" required>
+          </label>
+          <div class="form-status" id="verifyStatus"></div>
+          <button class="btn primary wide" type="submit">继续</button>
+        </form>
+      </div>
+
+      <div class="step" data-step="devices">
+        <div class="step-head">
+          <div>
+            <h2>选择摄像头</h2>
+            <p class="muted" id="devicesTip">已读取到以下设备。勾选后添加到主界面。</p>
+          </div>
+          <button class="btn ghost small" id="btnRelogin">换账号</button>
+        </div>
+        <div class="device-list" id="deviceList"></div>
+        <div class="form-status" id="devicesStatus"></div>
+        <button class="btn primary wide" id="btnAddSelected">添加选中摄像头</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 单路全屏查看 -->
+<div class="modal viewer" id="modalViewer" aria-hidden="true">
+  <div class="viewer-stage" id="viewerStage"></div>
+
+  <div class="viewer-top">
+    <div class="viewer-title">
+      <span class="live-dot"></span>
+      <span id="viewerName">摄像头</span>
+      <span class="viewer-sub" id="viewerSub"></span>
+    </div>
+    <div class="viewer-actions">
+      <button class="btn ghost" id="btnViewerMute" title="静音">🔇</button>
+      <button class="btn ghost" id="btnViewerShot" title="截图">📷</button>
+      <button class="btn ghost" id="btnViewerRec" title="录制">⏺</button>
+      <button class="btn ghost" id="btnViewerPip" title="画中画">⧉</button>
+      <button class="btn ghost" id="btnViewerQuality" title="画质">画质</button>
+      <button class="btn ghost" id="btnViewerClose" title="关闭">✕</button>
+    </div>
+  </div>
+
+  <div class="quality-menu" id="qualityMenu">
+    <button data-q="hd">高清</button>
+    <button data-q="sd">流畅</button>
+  </div>
+
+  <button class="viewer-nav prev" id="btnViewerPrev" title="上一路（←）">‹</button>
+  <button class="viewer-nav next" id="btnViewerNext" title="下一路（→）">›</button>
+</div>
+
+<!-- 设置 -->
+<div class="modal" id="modalSettings" aria-hidden="true">
+  <div class="modal-card narrow">
+    <button class="modal-close" data-close="modalSettings">✕</button>
+    <h2>设置</h2>
+    <div class="settings-list">
+      <div class="settings-row"><span>引擎版本</span><b id="setVersion">—</b></div>
+      <div class="settings-row"><span>已登录账号</span><b id="setUser">—</b></div>
+      <div class="settings-row"><span>账号区域</span><b id="setRegion">—</b></div>
+      <div class="settings-row"><span>视频链路</span><b>本机 ↔ 摄像头（局域网）</b></div>
+      <div class="settings-row"><span>首页布局</span>
+        <select id="setLayout">
+          <option value="1x1">1 × 1（1 路）</option>
+          <option value="2x2">2 × 2（4 路）</option>
+          <option value="3x2">3 × 2（6 路）</option>
+          <option value="3x3">3 × 3（9 路）</option>
+          <option value="all">全部（自动换行）</option>
+        </select>
+      </div>
+      <div class="settings-row"><span>画面比例</span>
+        <select id="setDisplay">
+          <option value="ratio">保持 16:9（不裁切）</option>
+          <option value="fill">铺满窗口（可能裁切）</option>
+        </select>
+      </div>
+      <div class="settings-row"><span>过滤门铃/电池设备</span>
+        <label class="switch"><input type="checkbox" id="setHideBattery"> 隐藏</label>
+      </div>
+      <div class="settings-row"><span>后台保持连接</span>
+        <label class="switch"><input type="checkbox" id="setKeepAlive"> 保持</label>
+      </div>
+      <div class="settings-row"><span>后台 2 分钟后休眠（释放内存）</span>
+        <label class="switch"><input type="checkbox" id="setBgSleep"> 开启</label>
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button class="btn ghost" id="btnReimport">重新读取设备</button>
+      <button class="btn danger" id="btnClear">清空所有摄像头</button>
+    </div>
+    <p class="muted small">每次建立新连接时，需要联网向小米云端获取一次摄像头密钥；音视频本身走局域网，不经过公网。</p>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="video-stream.js?v=20261110g"></script>
+<script type="module" src="app.js?v=20261110g"></script>
+</body>
+</html>

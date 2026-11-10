@@ -1,0 +1,28 @@
+# 真实配置：含小米 passToken、设备 DID 和局域网 IP，绝不能提交
+go2rtc.yaml
+go2rtc.yaml.bak
+go2rtc.yaml.*
+!go2rtc.yaml.example
+
+# 运行日志：含配置文件绝对路径（本机用户名）、设备 DID 和 IP
+*.log
+*.log.1
+
+# 二进制依赖，按 README 自行下载
+go2rtc.exe
+go2rtc.orig.exe
+bin/
+
+# 桌面版构建产物与依赖
+desktop/node_modules/
+desktop/dist/
+desktop/out/
+
+# UI 原型草稿：离线生成物，含内嵌画面、房间命名和局域网 IP，不入库
+design/
+
+# 本地临时文件
+.tmp-*
+.trash-local/
+__pycache__/
+*.pyc
