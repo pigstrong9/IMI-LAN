@@ -1,7 +1,10 @@
 # 第三方组件与参考实现
 
-本项目的原创部分（`web/`、`qr-login.js`、启动脚本）未指定单独许可证。
+本项目的原创部分（`web/app.js`、`web/index.html`、`web/style.css`、`qr-login.js`、`desktop/`、启动脚本）采用 [MIT License](LICENSE)，见仓库根目录 `LICENSE`。
 下面列出捆绑或参考的第三方项目及其许可证。
+
+> 随仓库分发的第三方源码必须携带其版权与许可声明，因此 `web/video-rtc.js` 和 `web/video-stream.js`
+> 的文件头保留了 go2rtc 的出处与版权声明，请勿删除。
 
 ## go2rtc（MIT）
 
@@ -49,3 +52,17 @@ SOFTWARE.
 - 使用方式：仅作为小米设备兼容性、型号与 `subtype` 资料的参考。
 - 说明：本项目未包含其 Python 代码、模板或 `legacy-miio.json` 转换数据。
 - 许可证：Apache License 2.0，全文见上游仓库的 `LICENSE`。
+
+## ffmpeg（GPL-3，仓库不含，仅本机使用）
+
+- 项目：https://ffmpeg.org
+- 使用方式：`go2rtc.yaml` 的 `ffmpeg.bin` 指向 `bin/ffmpeg.exe`，go2rtc 以**独立进程**调用它做 H.265 转码兜底。本项目代码不与它链接，也不包含其任何源码。
+- 分发范围：`bin/` 已在 `.gitignore` 中，仓库里**没有** ffmpeg 的任何文件，请按 README 自行下载。
+- **许可类型要注意**：开发时用的那个构建带 `--enable-gpl --enable-version3`，属于 **GPL-3.0 或更高**，不是 LGPL。GPL 的义务在**再分发**时才触发——把 `bin/` 连同便携版目录打包发给别人，就必须同时提供该构建的完整对应源码或书面源码要约。
+- 实践结论：便携版目录只自用；要分享给别人就别带 `bin/`，或改用 LGPL 构建并附许可证与源码链接。
+
+## Electron 与 Chromium（MIT / BSD 等）
+
+- 项目：https://www.electronjs.org （MIT）
+- 使用方式：`desktop/` 用它打包桌面版；`desktop/node_modules/` 与 `desktop/dist/` 都不入库。
+- 说明：electron-packager 的产物自带 `LICENSE` 和 `LICENSES.chromium.html`（Chromium 及其依赖的完整第三方声明）。若要分发便携版，这两个文件必须一起保留。

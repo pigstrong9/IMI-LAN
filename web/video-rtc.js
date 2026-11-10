@@ -13,6 +13,9 @@
  * - MediaSource for Safari iOS
  * - Customized built-in elements (extends HTMLVideoElement) because Safari
  * - Autoplay for WebRTC in Safari
+ *
+ * Copied from go2rtc (https://github.com/AlexxIT/go2rtc),
+ * Copyright (c) 2022 Alexey Khit, MIT License — see THIRD_PARTY_NOTICES.md.
  */
 export class VideoRTC extends HTMLElement {
     constructor() {

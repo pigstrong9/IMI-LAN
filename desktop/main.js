@@ -226,7 +226,7 @@ function createWindow() {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#0b0f14',
-    title: '米家监控',
+    title: 'IMI-LAN',
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       contextIsolation: true,
@@ -270,7 +270,7 @@ function scheduleSave() {
 function createTray() {
   const icon = path.join(__dirname, 'assets', 'icon-32.png');
   tray = new Tray(icon);
-  tray.setToolTip('米家监控');
+  tray.setToolTip('IMI-LAN');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开监控', click: showWindow },
     {
@@ -344,7 +344,7 @@ app.whenReady().then(async () => {
     if (!fs.existsSync(flag)) {
       dialog.showMessageBox({
         type: 'info',
-        title: '米家监控',
+        title: 'IMI-LAN',
         message: '如果摄像头一直显示连接超时：右键托盘图标 →「修复网络权限（管理员）」，完成后点「重启引擎」。',
         buttons: ['知道了'],
         noLink: true,

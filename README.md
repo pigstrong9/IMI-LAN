@@ -1,6 +1,10 @@
-# 米家监控 · 局域网直连版
+# IMI-LAN · 米家摄像头局域网直连
 
 一个替代「IMI Camera」的轻量客户端。它不通过小米的公网 P2P 中转看视频，而是直接连接局域网里的摄像头，延迟和卡顿会明显低于原版客户端。
+
+> **非官方项目**：IMI-LAN 是个人开源工具，与小米、米家、绿米（创米）等厂商无任何关系，也未获其授权或背书。
+> 小米、米家、Mijia、IMI Camera、Chuango 等名称的商标权归各自所有者，文中仅作识别性说明使用。
+> 请只在**你自己账号下、你自己拥有使用权的设备**上使用本工具，并自行确认这种做法符合你与当地的服务条款和法规。详见[声明与许可](#声明与许可)。
 
 ## 为什么原版会卡
 
@@ -31,8 +35,8 @@
 仓库不含登录令牌、摄像头地址和引擎二进制（都在 `.gitignore` 里），第一次克隆后需要补齐三样东西：
 
 1. 配置：复制 `go2rtc.yaml.example` 为 `go2rtc.yaml`。
-2. 引擎：从 [go2rtc releases](https://github.com/AlexxIT/go2rtc/releases) 下载 Windows 版，改名成 `go2rtc.exe` 放到项目根目录（`go2rtc.orig.exe` 是旧版本备份，不需要）。
-3. 转码兜底：把 ffmpeg 的 Windows 构建放进 `bin/`，文件名保持 `ffmpeg.exe`（配置里 `ffmpeg.bin` 指向它）。
+2. 引擎：从 [go2rtc releases](https://github.com/AlexxIT/go2rtc/releases) 下载 Windows 版，改名成 `go2rtc.exe` 放到项目根目录。
+3. 转码兜底：把 ffmpeg 的 Windows 构建放进 `bin/`，文件名保持 `ffmpeg.exe`（配置里 `ffmpeg.bin` 指向它）。自己用哪个构建都行；**如果打算把目录发给别人，选 LGPL 构建**，GPL 构建会带上提供源码的义务。
 
 之后扫码登录，令牌和摄像头地址会自动写进 `go2rtc.yaml`。
 
@@ -117,7 +121,7 @@ imi-lan/
 ├─ go2rtc.yaml.example 配置模板，复制成 go2rtc.yaml 再用
 ├─ .gitignore          排除令牌、日志和构建产物
 ├─ qr-login.js         二维码登录助手（Node，监听 127.0.0.1:1985）
-├─ bin/                ffmpeg（H.265 转码兜底，不入库，不要删）
+├─ bin/                ffmpeg（H.265 转码兜底，GPL 构建，不入库、不要随便携版外发）
 ├─ web/                本项目的网页界面
 │  ├─ index.html
 │  ├─ app.js
@@ -130,6 +134,8 @@ imi-lan/
 ├─ 停止监控.bat
 ├─ 修复网络权限.bat    网页版 go2rtc 的入站规则（需要管理员）
 ├─ 修复网络权限（桌面版）.bat  桌面版 go2rtc 的入站规则（需要管理员）
+├─ LICENSE             本项目原创部分的 MIT 许可证
+├─ THIRD_PARTY_NOTICES.md  第三方组件、许可证与分发注意事项
 └─ README.md
 ```
 
@@ -195,14 +201,43 @@ imi-lan/
 - 首页布局、画面比例、门铃过滤保存在浏览器 localStorage（`imi.settings`），手动暂停的摄像头保存在 `imi.paused`；换浏览器或清缓存后会恢复默认「2×2 + 16:9 + 隐藏门铃」。
 - 打开「添加摄像头」读取设备列表时，会自动把米家 App 里的昵称补到已添加的卡片上；换浏览器/清缓存后也能恢复中文名。
 - 高清/流畅不是固定编号：不同型号的 `subtype` 不同，已在 `web/app.js` 的 `QUALITY_BY_MODEL` 里按型号映射；新增型号时先试 `subtype=2/3`。
-- `bin/ffmpeg.exe` 只在 H.265 转码时用到，移动或备份项目时不要丢掉 `bin` 目录。
+- `bin/ffmpeg.exe` 只在 H.265 转码时用到，自己备份项目时别丢掉；但它是 GPL 构建，**不要把它放进发给别人的便携版目录**。
 - 改完 `web/` 下的文件后，把 `index.html` 里 `?v=` 的日期改一下（或按 Ctrl+Shift+R），否则浏览器可能继续使用旧缓存。
 - PTZ（云台控制）暂未实现，目前可以在米家 App 里控制。
 
-## 参考实现与许可
+## 声明与许可
 
-- 二维码登录流程参考 [MijiaLAN](https://github.com/iPocket-APP/MijiaLAN) 内置的 MenuBarMijia / MijiaCore（MIT，Copyright iPocket-APP）。`qr-login.js` 是按协议重新实现的 Node 内置模块代码，未包含其源码。
-- [go2rtc](https://github.com/AlexxIT/go2rtc)（MIT）：捆绑的流媒体引擎；`web/video-rtc.js` 来自其 MIT 许可的播放器。
-- [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（Apache-2.0）：设备兼容性与型号资料参考；本项目未包含其代码或模板。
+### 许可
 
-完整许可证文本见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目原创代码（`web/app.js`、`web/index.html`、`web/style.css`、`qr-login.js`、`desktop/`、启动脚本）以 MIT 许可证发布，全文见 [LICENSE](LICENSE)。
+
+第三方组件及其许可证、以及分发时的注意事项集中在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，简要如下：
+
+- [go2rtc](https://github.com/AlexxIT/go2rtc)（MIT）：流媒体引擎。`web/video-rtc.js` 和 `web/video-stream.js` 取自其播放器，文件头保留了出处与版权声明，请勿删除。
+- 二维码登录流程参考 [MijiaLAN](https://github.com/iPocket-APP/MijiaLAN) 内置的 MenuBarMijia / MijiaCore（MIT，Copyright iPocket-APP）。`qr-login.js` 是按公开协议用 Node 内置模块独立实现的，未包含其源码。
+- [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（Apache-2.0）：仅作设备兼容性与型号资料参考，未包含其代码、模板或数据文件。
+- **ffmpeg**：仓库里不含。开发时用的那个构建带 `--enable-gpl --enable-version3`，属 **GPL-3**，一旦连 `bin/` 一起再分发就产生提供源码的义务，所以自用可以、分享便携版时请把 `bin/` 去掉。
+- **Electron / Chromium**（MIT 等）：`desktop/node_modules/` 与 `desktop/dist/` 不入库；打包产物自带的 `LICENSE` 和 `LICENSES.chromium.html` 在分发时必须一起保留。
+
+### 非官方与商标
+
+IMI-LAN 是个人开源项目，与小米科技、米家、创米等厂商没有隶属、授权或合作关系，也未获其认可。
+小米、米家、Mijia、Chuango、IMI Camera 等名称与标识的商标权归各自所有者所有，本项目仅在「说明它兼容什么」的意义上使用这些名称。
+
+### 使用范围
+
+- 请只在**你自己账号下、你自己有权使用的设备**上运行本工具。
+- 工作方式是用你的登录令牌向小米云端换取**你自己摄像头**的本地密钥，不破解固件，不影响米家 App 正常使用。
+- 使用第三方客户端可能不符合设备厂商的服务条款。是否使用请自行判断，并自行承担由此产生的后果。
+
+### 免责
+
+本软件按「现状」提供，不含任何明示或暗示的保证（包括适销性和特定用途适用性）。因使用或无法使用本软件造成的任何损失由使用者承担。
+
+### 影像内容合规
+
+家用摄像头的画面属于个人信息，甚至可能构成敏感个人信息。录制、截图、转发或长期保存之前，请注意：
+
+- 覆盖共同居住人、保姆、护工、访客、快递员等人群时，应事先告知并取得同意；
+- 不要把摄像头对准他人有权期待隐私的区域（卫生间、卧室他人更衣等）；
+- 截图与录制文件保存在本机，本项目不上传任何画面；对外分享前请自行脱敏（打码、去除时间与位置线索）。
