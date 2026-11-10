@@ -131,10 +131,17 @@ python fpk/build.py --go /path/to/go --ffmpeg /path/to/ffmpeg
 ## 安全说明
 
 - 网关只监听 `1984`，扫码助手和 go2rtc API 都只监听回环地址；
+- 访问密码是唯一凭据：拿到密码的人可以打开网页，也可以通过 `/api/config` 读到 `go2rtc.yaml` 里的登录令牌。只把密码给信任的人；
 - 访问密码只保存在 `$TRIM_PKGETC/access.pass`（权限 600），Cookie 用 `access.secret` 做 HMAC 签名；
 - 修改密码会让旧 Cookie 失效；
 - 摄像头音视频仍然只在飞牛和摄像头之间走局域网，不经过网关中转；
 - 本项目不会上传画面，截图/录像只在浏览器本地生成。
+
+如果构建时 Go 模块下载失败，可以显式指定代理：
+
+```bash
+GOPROXY=https://goproxy.cn,direct python fpk/build.py --go /path/to/go
+```
 
 ## 已验证范围
 

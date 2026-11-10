@@ -72,10 +72,10 @@ trim_log() {
 }
 
 find_node() {
-    if [ -x /var/apps/nodejs_v22/target/bin/node ]; then
-        echo /var/apps/nodejs_v22/target/bin/node
-        return 0
-    fi
+    local p
+    for p in /var/apps/nodejs_v22/target/bin/node /var/apps/nodejs*/target/bin/node; do
+        [ -x "${p}" ] && { echo "${p}"; return 0; }
+    done
     command -v node 2>/dev/null
 }
 
@@ -144,7 +144,7 @@ start_all() {
         trim_log "${VAR}/go2rtc.log"
         nohup "${G2R_BIN}" -config "${CONFIG}" >> "${VAR}/go2rtc.log" 2>&1 &
         echo $! > "${VAR}/go2rtc.pid"
-        if ! wait_port "${API_PORT}" 30; then
+        if ! wait_port "${API_PORT}" 30 || ! pid_alive "$(read_pid "${VAR}/go2rtc.pid")" "${G2R_BIN}"; then
             fail "go2rtc 启动失败，详见 ${VAR}/go2rtc.log"
         fi
         log "go2rtc up pid=$(read_pid "${VAR}/go2rtc.pid")"
@@ -166,7 +166,7 @@ start_all() {
             -secret-file "${SECRET_FILE}" \
             >> "${VAR}/gateway.log" 2>&1 &
         echo $! > "${VAR}/gateway.pid"
-        if ! wait_port "${WEB_PORT}" 20; then
+        if ! wait_port "${WEB_PORT}" 20 || ! pid_alive "$(read_pid "${VAR}/gateway.pid")" "${GW_BIN}"; then
             fail "网关启动失败，详见 ${VAR}/gateway.log"
         fi
         log "gateway up pid=$(read_pid "${VAR}/gateway.pid")"
