@@ -1,0 +1,3 @@
+#!/bin/bash
+# 升级后：install_callback 已经负责补执行权限和初始化新配置
+exit 0

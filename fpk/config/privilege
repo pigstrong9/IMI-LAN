@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "imi_lan",
+    "groupname": "imi_lan"
+}

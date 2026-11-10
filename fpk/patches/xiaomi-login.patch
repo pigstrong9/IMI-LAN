@@ -1,0 +1,44 @@
+--- a/pkg/xiaomi/cloud.go	2026-11-10 17:15:58.104368300 +0800
++++ b/pkg/xiaomi/cloud.go	2026-11-10 17:16:05.622200600 +0800
+@@ -314,7 +314,20 @@
+ }
+ 
+ func (c *Cloud) finishAuth(location string) error {
+-	res, err := c.client.Get(location)
++	req, err := http.NewRequest("GET", location, nil)
++	if err != nil {
++		return err
++	}
++	// finishAuth 需要带着登录阶段拿到的 passToken 再请求一次，
++	// 否则小米会返回 401，拿不到 userId/cUserId/serviceToken。
++	if c.passToken != "" {
++		cookie := "passToken=" + c.passToken
++		if c.userID != "" {
++			cookie = "userId=" + c.userID + "; " + cookie
++		}
++		req.Header.Set("Cookie", cookie)
++	}
++	res, err := c.client.Do(req)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -384,6 +397,10 @@
+ 
+ 	c.ssecurity = v1.Ssecurity
+ 	c.passToken = v1.PassToken
++	if c.passToken == "" {
++		c.passToken = passToken
++	}
++	c.userID = userID
+ 
+ 	return c.finishAuth(v1.Location)
+ }
+@@ -435,7 +452,7 @@
+ 	defer res.Body.Close()
+ 
+ 	if res.StatusCode != http.StatusOK {
+-		return nil, errors.New(res.Status)
++		return nil, fmt.Errorf("%s: %s", apiURL, res.Status)
+ 	}
+ 
+ 	body, err := io.ReadAll(res.Body)

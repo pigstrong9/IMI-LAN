@@ -18,6 +18,10 @@ desktop/node_modules/
 desktop/dist/
 desktop/out/
 
+# fnOS fpk 构建产物与缓存
+fpk/.build/
+fpk/dist/
+
 # UI 原型草稿：离线生成物，含内嵌画面、房间命名和局域网 IP，不入库
 design/
 

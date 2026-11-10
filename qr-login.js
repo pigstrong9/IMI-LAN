@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-/* 米家二维码登录助手（本地 127.0.0.1:1985）
+/* 米家二维码登录助手（默认 127.0.0.1:1985）
  *
  * 1. 向小米账号页申请二维码并长轮询扫码结果
  * 2. 拿到 passToken 后写回 go2rtc.yaml 的 xiaomi: 段
  * 3. 重启 go2rtc 让新 token 生效
  *
  * 仅使用 Node 内置模块，可由 Electron 以 ELECTRON_RUN_AS_NODE=1 启动。
+ * NAS 版通过 IMI_CONFIG / IMI_HELPER_HOST / IMI_API_PORT 等环境变量定位配置和引擎。
  * 二维码流程参考 MijiaLAN / MenuBarMijia (MIT, iPocket-APP) 的公开实现。
  */
 
@@ -15,18 +16,19 @@ const http = require('http');
 const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
-const BASE = __dirname;
-const CONFIG = path.join(BASE, 'go2rtc.yaml');
-const EXE = path.join(BASE, 'go2rtc.exe');
-const HELPER_LOG = path.join(BASE, 'qr-login.log');
-const GO2RTC_LOG = path.join(BASE, 'go2rtc-console.log');
+const BASE = process.env.IMI_ROOT || __dirname;
+const CONFIG = process.env.IMI_CONFIG || path.join(BASE, 'go2rtc.yaml');
+const EXE = process.env.IMI_GO2RTC_BIN || path.join(BASE, 'go2rtc.exe');
+const LOG_DIR = process.env.IMI_LOG_DIR || BASE;
+const HELPER_LOG = path.join(LOG_DIR, 'qr-login.log');
+const GO2RTC_LOG = path.join(LOG_DIR, 'go2rtc-console.log');
 
-const API_PORT = 1984;
-const HELPER_PORT = 1985;
-const ALLOWED_ORIGINS = new Set([
-  'http://127.0.0.1:1984',
-  'http://localhost:1984',
-]);
+const API_HOST = process.env.IMI_API_HOST || '127.0.0.1';
+const API_PORT = Number(process.env.IMI_API_PORT || 1984);
+const HELPER_HOST = process.env.IMI_HELPER_HOST || '127.0.0.1';
+const HELPER_PORT = Number(process.env.IMI_HELPER_PORT || 1985);
+// NAS 版由同一容器里的网关启动引擎，重启走 go2rtc 自带的 /api/restart
+const RESTART_MODE = process.env.IMI_RESTART_MODE || (process.platform === 'win32' ? 'spawn' : 'api');
 
 const UA = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -124,7 +126,7 @@ function portPid(port) {
 
 function apiUp() {
   return new Promise(resolve => {
-    const req = http.get(`http://127.0.0.1:${API_PORT}/api`, res => {
+    const req = http.get(`http://${API_HOST}:${API_PORT}/api`, res => {
       res.resume();
       resolve(true);
     });
@@ -133,7 +135,38 @@ function apiUp() {
   });
 }
 
+function apiPost(path) {
+  return new Promise(resolve => {
+    const req = http.request({
+      host: API_HOST,
+      port: API_PORT,
+      path,
+      method: 'POST',
+    }, res => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode < 500));
+    });
+    req.setTimeout(2000, () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
 async function restartEngine() {
+  if (RESTART_MODE === 'api') {
+    log('restarting go2rtc via api');
+    await apiPost('/api/restart');
+    for (let i = 0; i < 60; i++) {
+      if (await apiUp()) {
+        log('go2rtc is up');
+        return true;
+      }
+      await sleep(500);
+    }
+    log('go2rtc did not come up');
+    return false;
+  }
+
   const pid = portPid(API_PORT);
   if (pid) {
     log(`stopping go2rtc pid=${pid}`);
@@ -220,6 +253,9 @@ function saveToken(user, token) {
   }
 
   fs.writeFileSync(CONFIG, lines.join(eol), 'utf8');
+  if (process.platform !== 'win32') {
+    try { fs.chmodSync(CONFIG, 0o600); } catch {}
+  }
   roomsCache = { key: '', at: 0, data: null };
   authCache = { key: '', at: 0, auth: null };
   roomsFail = { key: '', at: 0, message: '' };
@@ -375,7 +411,7 @@ function once(key, task) {
 }
 
 function getAuth(user, token, force = false) {
-  const key = `${user}|${token.slice(-12)}`;
+  const key = user;
   if (force && authCache.key === key) authCache = { key: '', at: 0, auth: null };
   return once(`login:${key}`, async () => {
     // 排队等锁期间，前一个调用可能已经登录完了
@@ -390,6 +426,43 @@ function getAuth(user, token, force = false) {
 
 function fetchRooms(user, region) {
   return once(`rooms:${user}|${region}`, () => loadRooms(user, region));
+}
+
+// 小米会在登录时轮换 passToken。go2rtc 只在内存里用新 token，
+// 这里把轮换后的值写回配置，避免引擎重启后又拿旧 token 要求重新扫码。
+function persistRefreshedToken(user, token, auth) {
+  const next = auth?.session?.cookies?.get('passToken') || '';
+  if (!next || next === token) return;
+  try {
+    const original = fs.readFileSync(CONFIG);
+    let text = original.toString('utf8').replace(/^\uFEFF/, '');
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    const start = lines.findIndex(l => /^xiaomi:\s*(?:#.*)?$/.test(l));
+    if (start < 0) return;
+    let end = lines.length;
+    for (let j = start + 1; j < lines.length; j++) {
+      if (/^\S/.test(lines[j])) { end = j; break; }
+    }
+    const entries = {};
+    for (let k = start + 1; k < end; k++) {
+      const m = lines[k].match(/^\s+("[^"]+"|[^:\s]+)\s*:\s*(.*?)\s*$/);
+      if (!m) continue;
+      const name = m[1].replace(/^"|"$/g, '');
+      let value = m[2].trim();
+      if (value.length >= 2 && value[0] === '"' && value.endsWith('"')) value = value.slice(1, -1);
+      entries[name] = value;
+    }
+    entries[user] = next;
+    const block = ['xiaomi:', ...Object.entries(entries).map(
+      ([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`
+    )];
+    lines.splice(start, end - start, ...block);
+    fs.writeFileSync(CONFIG, lines.join(eol), 'utf8');
+    log(`token refreshed for ${mask(user)}`);
+  } catch (e) {
+    log(`token refresh failed: ${e.message}`);
+  }
 }
 
 async function loadRooms(user, region) {
@@ -407,6 +480,7 @@ async function loadRooms(user, region) {
     if (!token) throw new Error('没有可用的登录令牌');
 
     let auth = await getAuth(user, token);
+    persistRefreshedToken(user, token, auth);
     const homeBody = { limit: 150, fetch_share: true, fetch_share_dev: true, plat_form: 0, app_ver: 9 };
     let home;
     try {
@@ -583,7 +657,7 @@ class QRSession {
 
     if (!await restartEngine()) {
       this.state = 'error';
-      this.message = 'token 已保存，但引擎启动失败，请运行「启动监控.bat」';
+      this.message = 'token 已保存，但引擎重启失败，请重启 IMI-LAN 应用';
       return;
     }
     this.state = 'done';
@@ -634,12 +708,17 @@ async function startSession() {
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
-  if (ALLOWED_ORIGINS.has(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  }
+  if (!origin) return;
+  try {
+    const u = new URL(origin);
+    const host = String(req.headers.host || '').replace(/:\d+$/, '');
+    if (u.hostname === host || ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(u.hostname)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+  } catch {}
 }
 
 function sendJSON(req, res, status, data) {
@@ -756,6 +835,6 @@ server.on('error', err => {
   process.exit(0);
 });
 
-server.listen(HELPER_PORT, '127.0.0.1', () => {
-  log(`helper listening on 127.0.0.1:${HELPER_PORT}`);
+server.listen(HELPER_PORT, HELPER_HOST, () => {
+  log(`helper listening on ${HELPER_HOST}:${HELPER_PORT}`);
 });

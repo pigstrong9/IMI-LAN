@@ -1,0 +1,10 @@
+#!/bin/bash
+# 卸载后按用户选择保留或删除配置（登录令牌在 go2rtc.yaml 里）
+set -u
+
+if [ "${wizard_delete_data:-false}" = "true" ]; then
+    rm -rf "${TRIM_PKGETC}" 2>/dev/null || true
+    rm -rf "${TRIM_PKGVAR}" 2>/dev/null || true
+fi
+
+exit 0

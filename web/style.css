@@ -947,6 +947,7 @@ body.wall .card { border: 0; border-radius: 0; box-shadow: none; animation: none
 body.wall .card-head,
 body.wall .card-foot,
 body.wall .card-tools,
+body.wall .card-menu-btn,
 body.wall .card-hero-info,
 body.wall .card-mask { display: none !important; }
 body.wall .card-media { flex: 1 1 0 !important; aspect-ratio: auto !important; min-height: 0; position: relative !important; inset: auto !important; }

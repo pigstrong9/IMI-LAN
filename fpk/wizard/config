@@ -1,0 +1,16 @@
+[
+  {
+    "stepTitle": "访问密码",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "留空表示保持当前密码。修改后，已经登录过的设备需要重新输入密码。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_access_password",
+        "label": "新的访问密码（至少 6 位，留空不修改）"
+      }
+    ]
+  }
+]

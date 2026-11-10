@@ -88,6 +88,14 @@
 - exe 未签名，Windows SmartScreen 可能提示，选「更多信息 → 仍要运行」。
 - 源码在 `desktop/`，`node_modules` 是构建依赖（约 250MB）；重新打包用 `desktop/package.json` 的 `pack:portable`，打包后需要把 `go2rtc.exe`、`go2rtc.yaml`、`web`、`bin`、`qr-login.js` 和两个防火墙 bat 复制进 `desktop/dist/IMI-LAN-win32-x64/`。
 
+## fnOS（飞牛）版
+
+仓库里的 `fpk/` 提供 fnOS 原生应用包（`.fpk`）。安装后，局域网内所有设备都可以用浏览器访问 `http://<飞牛地址>:1984`，第一次打开需要输入在安装向导里设置的访问密码（用户名固定 `imi`）。
+
+- Linux 版 go2rtc 带小米登录 401 补丁，扫码助手和网页合并到同一个端口；
+- 扫码助手依赖 fnOS 的 `nodejs_v22` 运行时，扫码登录和米家房间信息都能用；
+- 构建、安装、密码修改和常见问题见 [fpk/README.md](fpk/README.md)。
+
 ## 功能
 
 - 多路摄像头网格，自动播放
@@ -129,6 +137,7 @@ imi-lan/
 │  ├─ video-rtc.js     go2rtc 的播放器（MIT）
 │  └─ video-stream.js
 ├─ desktop/            Electron 桌面版（dist/ 里是打包好的便携版）
+├─ fpk/                fnOS 原生应用包（manifest、生命周期脚本、构建脚本）
 ├─ 启动监控.bat        Edge 窗口版
 ├─ 启动桌面版.bat      启动 Electron 便携版
 ├─ 停止监控.bat
@@ -141,10 +150,10 @@ imi-lan/
 
 ## 安全与隐私
 
-- 网页和 API 只监听 `127.0.0.1:1984`，局域网内其他设备无法访问。
+- Windows 版网页和 API 只监听 `127.0.0.1:1984`，局域网内其他设备无法访问；fnOS 版监听 `0.0.0.0:1984`，由网关强制访问密码，扫码助手和引擎 API 仍只监听回环地址。
 - 小米账号密码只在登录时提交给本机的 go2rtc，不会保存；保存的是登录令牌（在 `go2rtc.yaml` 里）。
 - 摄像头密钥每次连接时向小米云端获取；音视频本身不经过公网。
-- 二维码登录助手 `qr-login.js` 只监听 `127.0.0.1:1985`，只响应来自 `127.0.0.1:1984` / `localhost:1984` 的请求；不会把 token 返回给网页，只写入 `go2rtc.yaml`，日志里只记录脱敏账号。
+- 二维码登录助手 `qr-login.js` 只监听 `127.0.0.1:1985`；桌面版只接受本机页面，fnOS 版由网关代理访问。它不会把 token 返回给网页，只写入 `go2rtc.yaml`，日志里只记录脱敏账号。
 - 不要把 `go2rtc.yaml` 发给别人，里面有账号令牌。
 - `go2rtc.yaml`、`go2rtc.yaml.bak`、`*.log` 和 `desktop/dist/` 都已在 `.gitignore` 里；提交前用 `git status` 再确认一遍没有把它们带进去。
 - 日志会记录配置文件的绝对路径（含 Windows 用户名）以及摄像头 IP 和设备 ID，往 issue 里贴日志前先删掉这几项。

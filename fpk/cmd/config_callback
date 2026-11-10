@@ -1,0 +1,48 @@
+#!/bin/bash
+# 应用设置里修改访问密码；留空表示保持原密码
+set -u
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+ETC="${TRIM_PKGETC}"
+PASS_FILE="${ETC}/access.pass"
+
+fail() {
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        echo "$*" > "${TRIM_TEMP_LOGFILE}"
+    fi
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+PASSWORD="${wizard_access_password:-}"
+PASSWORD="${PASSWORD%$'\r'}"
+
+if [ -z "${PASSWORD}" ]; then
+    exit 0
+fi
+
+case "${PASSWORD}" in
+    *$'\n'*|*$'\r'*)
+        fail "访问密码不能包含换行"
+        ;;
+esac
+
+if [ "${#PASSWORD}" -lt 6 ]; then
+    fail "访问密码至少 6 位"
+fi
+
+printf '%s' "${PASSWORD}" > "${PASS_FILE}.tmp" || fail "无法写入访问密码"
+mv -f "${PASS_FILE}.tmp" "${PASS_FILE}"
+chmod 600 "${PASS_FILE}" 2>/dev/null || true
+
+MAIN="/var/apps/${TRIM_APPNAME}/cmd/main"
+if [ ! -x "${MAIN}" ]; then
+    MAIN="${TRIM_APPDEST}/../cmd/main"
+fi
+
+if [ -x "${MAIN}" ]; then
+    ( sleep 1; "${MAIN}" restart ) >/dev/null 2>&1 &
+fi
+
+exit 0

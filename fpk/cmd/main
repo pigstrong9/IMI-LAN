@@ -1,0 +1,214 @@
+#!/bin/bash
+# IMI-LAN fnOS 生命周期脚本：go2rtc + 二维码助手 + 单端口网关
+set -u
+
+export PATH="/var/apps/nodejs_v22/target/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+APP="${TRIM_APPDEST}"
+ETC="${TRIM_PKGETC}"
+VAR="${TRIM_PKGVAR}"
+LOG="${VAR}/imi-lan.log"
+
+CONFIG="${ETC}/go2rtc.yaml"
+PASS_FILE="${ETC}/access.pass"
+SECRET_FILE="${ETC}/access.secret"
+
+G2R_BIN="${APP}/server/go2rtc"
+GW_BIN="${APP}/server/imi-gateway"
+QR_JS="${APP}/server/qr-login.js"
+WWW_DIR="${APP}/www"
+
+WEB_PORT=1984
+HELPER_PORT=1985
+API_PORT=1986
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" >> "${LOG}"
+}
+
+fail() {
+    log "ERROR: $*"
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        echo "$*" > "${TRIM_TEMP_LOGFILE}"
+    fi
+    exit 1
+}
+
+read_pid() {
+    [ -r "$1" ] && tr -d '[:space:]' < "$1" 2>/dev/null
+}
+
+pid_alive() {
+    local pid="$1" needle="$2"
+    [ -n "${pid}" ] || return 1
+    kill -0 "${pid}" 2>/dev/null || return 1
+    if [ -r "/proc/${pid}/cmdline" ]; then
+        tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -qF "${needle}"
+        return $?
+    fi
+    return 0
+}
+
+wait_port() {
+    local port="$1" tries="${2:-20}" i=0
+    while [ "${i}" -lt "${tries}" ]; do
+        if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+            exec 3>&- 2>/dev/null
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 0.5
+    done
+    return 1
+}
+
+trim_log() {
+    local f="$1" size
+    [ -f "${f}" ] || return 0
+    size=$(stat -c%s "${f}" 2>/dev/null || echo 0)
+    if [ "${size}" -gt 5242880 ]; then
+        mv -f "${f}" "${f}.1" 2>/dev/null || true
+    fi
+}
+
+find_node() {
+    if [ -x /var/apps/nodejs_v22/target/bin/node ]; then
+        echo /var/apps/nodejs_v22/target/bin/node
+        return 0
+    fi
+    command -v node 2>/dev/null
+}
+
+start_helper() {
+    local node
+    node="$(find_node)"
+    if [ -z "${node}" ]; then
+        log "node runtime not found, QR helper disabled"
+        return 0
+    fi
+    [ -f "${QR_JS}" ] || {
+        log "qr-login.js missing, QR helper disabled"
+        return 0
+    }
+    if pid_alive "$(read_pid "${VAR}/qr.pid")" "${QR_JS}"; then
+        log "qr helper already running"
+        return 0
+    fi
+    trim_log "${VAR}/qr-login.log"
+    IMI_ROOT="${APP}" \
+    IMI_CONFIG="${CONFIG}" \
+    IMI_LOG_DIR="${VAR}" \
+    IMI_HELPER_HOST=127.0.0.1 \
+    IMI_HELPER_PORT="${HELPER_PORT}" \
+    IMI_API_HOST=127.0.0.1 \
+    IMI_API_PORT="${API_PORT}" \
+    IMI_RESTART_MODE=api \
+    nohup "${node}" "${QR_JS}" >> "${VAR}/qr-login.log" 2>&1 &
+    echo $! > "${VAR}/qr.pid"
+    if wait_port "${HELPER_PORT}" 20; then
+        log "qr helper up pid=$(read_pid "${VAR}/qr.pid")"
+    else
+        log "qr helper did not open port ${HELPER_PORT}"
+    fi
+}
+
+stop_pid() {
+    local pidfile="$1" needle="$2" name="$3" pid i
+    pid="$(read_pid "${pidfile}")"
+    if pid_alive "${pid}" "${needle}"; then
+        log "stopping ${name} pid=${pid}"
+        kill -TERM "${pid}" 2>/dev/null || true
+        i=0
+        while pid_alive "${pid}" "${needle}" && [ "${i}" -lt 15 ]; do
+            sleep 0.5
+            i=$((i + 1))
+        done
+        if pid_alive "${pid}" "${needle}"; then
+            log "killing ${name} pid=${pid}"
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    fi
+    rm -f "${pidfile}"
+}
+
+start_all() {
+    [ -x "${G2R_BIN}" ] || fail "引擎文件缺失：${G2R_BIN}，请重新安装应用"
+    [ -x "${GW_BIN}" ] || fail "网关文件缺失：${GW_BIN}，请重新安装应用"
+    [ -f "${CONFIG}" ] || fail "配置文件缺失：${CONFIG}，请重新安装应用"
+    [ -s "${PASS_FILE}" ] || fail "访问密码缺失，请在应用设置里重新设置访问密码"
+    [ -s "${SECRET_FILE}" ] || fail "网关密钥缺失，请重新安装应用"
+
+    if pid_alive "$(read_pid "${VAR}/go2rtc.pid")" "${G2R_BIN}"; then
+        log "go2rtc already running"
+    else
+        trim_log "${VAR}/go2rtc.log"
+        nohup "${G2R_BIN}" -config "${CONFIG}" >> "${VAR}/go2rtc.log" 2>&1 &
+        echo $! > "${VAR}/go2rtc.pid"
+        if ! wait_port "${API_PORT}" 30; then
+            fail "go2rtc 启动失败，详见 ${VAR}/go2rtc.log"
+        fi
+        log "go2rtc up pid=$(read_pid "${VAR}/go2rtc.pid")"
+    fi
+
+    start_helper
+
+    if pid_alive "$(read_pid "${VAR}/gateway.pid")" "${GW_BIN}"; then
+        log "gateway already running"
+    else
+        trim_log "${VAR}/gateway.log"
+        nohup "${GW_BIN}" \
+            -listen "0.0.0.0:${WEB_PORT}" \
+            -static "${WWW_DIR}" \
+            -go2rtc "http://127.0.0.1:${API_PORT}" \
+            -helper "http://127.0.0.1:${HELPER_PORT}" \
+            -user imi \
+            -pass-file "${PASS_FILE}" \
+            -secret-file "${SECRET_FILE}" \
+            >> "${VAR}/gateway.log" 2>&1 &
+        echo $! > "${VAR}/gateway.pid"
+        if ! wait_port "${WEB_PORT}" 20; then
+            fail "网关启动失败，详见 ${VAR}/gateway.log"
+        fi
+        log "gateway up pid=$(read_pid "${VAR}/gateway.pid")"
+    fi
+}
+
+stop_all() {
+    stop_pid "${VAR}/gateway.pid" "${GW_BIN}" "gateway"
+    stop_pid "${VAR}/qr.pid" "${QR_JS}" "qr helper"
+    stop_pid "${VAR}/go2rtc.pid" "${G2R_BIN}" "go2rtc"
+    # pid 文件丢失时的兜底，只匹配本应用的完整路径
+    pkill -f "${GW_BIN}" 2>/dev/null || true
+    pkill -f "${QR_JS}" 2>/dev/null || true
+    pkill -f "${G2R_BIN}" 2>/dev/null || true
+    return 0
+}
+
+mkdir -p "${VAR}" 2>/dev/null || true
+
+case "${1:-}" in
+    start)
+        start_all
+        exit 0
+        ;;
+    stop)
+        stop_all
+        exit 0
+        ;;
+    restart)
+        stop_all
+        sleep 1
+        start_all
+        exit 0
+        ;;
+    status)
+        if pid_alive "$(read_pid "${VAR}/gateway.pid")" "${GW_BIN}" \
+            && pid_alive "$(read_pid "${VAR}/go2rtc.pid")" "${G2R_BIN}"; then
+            exit 0
+        fi
+        exit 3
+        ;;
+    *)
+        exit 1
+        ;;
+esac

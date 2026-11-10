@@ -1,0 +1,26 @@
+[
+  {
+    "stepTitle": "访问设置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "安装后，局域网内所有设备访问 http://飞牛地址:1984。浏览器会弹出登录框，用户名固定为 imi，密码就是下面这一项。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_access_password",
+        "label": "访问密码（至少 6 位）",
+        "rules": [
+          {
+            "required": true,
+            "message": "请设置访问密码"
+          },
+          {
+            "min": 6,
+            "message": "密码至少 6 位"
+          }
+        ]
+      }
+    ]
+  }
+]

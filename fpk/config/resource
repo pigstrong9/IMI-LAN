@@ -1,0 +1,6 @@
+{
+    "port-config": {
+        "protocol-file": "imi-lan.sc"
+    },
+    "systemd-unit": {}
+}

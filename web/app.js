@@ -23,6 +23,11 @@ const state = {
   roomData: cachedRooms(), // 本地助手 /rooms 返回的米家房间与设备映射（启动时先用上次缓存）
 };
 
+// NAS 版由内置网关把二维码助手代理到同源；桌面版仍直连本机 1985
+const QR_ORIGIN = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname)
+  ? `${location.protocol}//127.0.0.1:1985`
+  : '';
+
 // 后台保持连接最多维持 2 分钟，之后释放视频解码与引擎缓冲，回到前台自动重连
 const BACKGROUND_IDLE_MS = 2 * 60 * 1000;
 const HIDDEN_GRACE_MS = 4 * 1000;
@@ -713,7 +718,7 @@ async function syncRooms() {
   try {
     const params = new URLSearchParams({ region: state.region });
     params.set('id', state.user);
-    const res = await fetch('http://127.0.0.1:1985/rooms?' + params.toString(), {
+    const res = await fetch(QR_ORIGIN + '/rooms?' + params.toString(), {
       cache: 'no-store',
       // 助手冷启动时要做一次云端登录，超时必须比服务端的 20s 宽松
       signal: AbortSignal.timeout(25000),
@@ -1790,7 +1795,6 @@ function showStep(name) {
 /* QR login (local Node helper)                                        */
 /* ------------------------------------------------------------------ */
 
-const QR_ORIGIN = 'http://127.0.0.1:1985';
 let qrSid = '';
 let qrTimer = 0;
 let qrSeq = 0;

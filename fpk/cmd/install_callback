@@ -1,0 +1,88 @@
+#!/bin/bash
+# 安装完成后：补执行权限、生成 go2rtc 配置和访问密码
+set -u
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+APP="${TRIM_APPDEST}"
+ETC="${TRIM_PKGETC}"
+VAR="${TRIM_PKGVAR}"
+
+CONFIG="${ETC}/go2rtc.yaml"
+PASS_FILE="${ETC}/access.pass"
+SECRET_FILE="${ETC}/access.secret"
+
+fail() {
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        echo "$*" > "${TRIM_TEMP_LOGFILE}"
+    fi
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+mkdir -p "${ETC}" "${VAR}" || fail "无法创建应用目录"
+
+# fnpack 在 Windows 上打包会丢失执行位，这里补回来
+chmod +x "${APP}/server/go2rtc" "${APP}/server/imi-gateway" 2>/dev/null || true
+
+PASSWORD="${wizard_access_password:-}"
+PASSWORD="${PASSWORD%$'\r'}"
+
+case "${PASSWORD}" in
+    *$'\n'*|*$'\r'*)
+        fail "访问密码不能包含换行"
+        ;;
+esac
+
+if [ -z "${PASSWORD}" ]; then
+    fail "请设置访问密码"
+fi
+if [ "${#PASSWORD}" -lt 6 ]; then
+    fail "访问密码至少 6 位"
+fi
+
+printf '%s' "${PASSWORD}" > "${PASS_FILE}.tmp" || fail "无法写入访问密码"
+mv -f "${PASS_FILE}.tmp" "${PASS_FILE}"
+chmod 600 "${PASS_FILE}" 2>/dev/null || true
+
+if [ ! -s "${SECRET_FILE}" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32 > "${SECRET_FILE}.tmp"
+    else
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "${SECRET_FILE}.tmp"
+    fi
+    mv -f "${SECRET_FILE}.tmp" "${SECRET_FILE}"
+    chmod 600 "${SECRET_FILE}" 2>/dev/null || true
+fi
+
+if [ ! -f "${CONFIG}" ]; then
+    FFMPEG_BIN="ffmpeg"
+    if [ -x "${APP}/bin/ffmpeg" ]; then
+        FFMPEG_BIN="${APP}/bin/ffmpeg"
+    fi
+    cat > "${CONFIG}" <<EOF
+api:
+  listen: "127.0.0.1:1986"
+  static_dir: ""
+
+rtsp:
+  listen: "127.0.0.1:8554"
+
+webrtc:
+  listen: ":8555"
+
+log:
+  level: info
+
+ffmpeg:
+  bin: "${FFMPEG_BIN}"
+
+# 扫码或账号密码登录成功后，登录令牌由助手写入这里
+xiaomi:
+
+streams:
+EOF
+    chmod 600 "${CONFIG}" 2>/dev/null || true
+fi
+
+exit 0
