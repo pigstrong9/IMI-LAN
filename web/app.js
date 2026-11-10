@@ -1,5 +1,5 @@
 /* IMI-LAN · 局域网直连
- * 前端只与本机 go2rtc (127.0.0.1:1984) 通信。
+ * 前端只与本机 go2rtc (127.0.0.1:19840) 通信。
  */
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -2072,13 +2072,15 @@ async function syncDeviceMeta() {
 async function afterLogin() {
   const users = await api('/api/xiaomi');
   const list = Array.isArray(users) ? users : [];
+  const prevUser = localStorage.getItem('imi.user');
   state.user = list.find(id => !(state.usersBefore || []).includes(id)) || list[0] || '';
+  if (prevUser && prevUser !== state.user) {
+    state.roomData = null;
+    localStorage.removeItem('imi.rooms');
+  }
   localStorage.setItem('imi.user', state.user);
-  state.roomData = null;
-  localStorage.removeItem('imi.rooms');
   roomSyncFailed = false;
   if (!state.user) throw new Error('登录成功，但没有读到账号信息');
-  setTimeout(syncRooms, 3000);
 
   // 读取设备列表
   await loadDevices(state.user, state.region);
@@ -2397,7 +2399,8 @@ function bindEvents() {
     await checkEngine();
     await refreshStreams();
     for (const card of state.cards.values()) card.reload();
-    toast('已刷新');
+    syncRooms();
+    toast('画面已刷新，房间信息更新中…');
   });
 
   $('#btnMuteAll').addEventListener('click', () => {
@@ -2787,14 +2790,17 @@ async function init() {
 
   await checkEngine();
   await restoreUser();
+  // 房间信息按需刷新：没有缓存时先在引擎登录前拉一次，之后只在手动刷新时更新，
+  // 避免助手反复登录把引擎正在用的 token 挤掉。
+  if (!state.roomData) {
+    toast('正在读取房间信息…');
+    try { await syncRooms(); } catch {}
+  }
   await refreshStreams();
-  // 先让引擎自己完成云端登录并出画，再让本地助手补房间信息，避免两边同时登录触发小米风控
   setTimeout(syncDeviceMeta, 6000);
-  setTimeout(syncRooms, 3000);
 
   startPolling();
   pollSignals();
-  setInterval(syncRooms, 300000);
   window.addEventListener('resize', () => fitGrid(state.cards.size));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (themeMode() === 'auto') applyTheme('auto', false);

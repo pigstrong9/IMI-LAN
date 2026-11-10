@@ -11,8 +11,37 @@ const ENGINE = path.join(ROOT, 'go2rtc.exe');
 const CONFIG = path.join(ROOT, 'go2rtc.yaml');
 const QR_SCRIPT = path.join(ROOT, 'qr-login.js');
 const FW_BAT = path.join(ROOT, '修复网络权限（桌面版）.bat');
-const API_URL = 'http://127.0.0.1:1984';
-const API_PORT = 1984;
+
+function readApiPort() {
+  try {
+    const lines = fs.readFileSync(CONFIG, 'utf8').split(/\r?\n/);
+    let inApi = false;
+    for (const line of lines) {
+      if (/^api:\s*$/.test(line)) { inApi = true; continue; }
+      if (inApi && /^\S/.test(line)) break;
+      if (!inApi) continue;
+      const m = line.match(/^\s+listen:\s*"[^"]*:(\d+)"/);
+      if (m) return Number(m[1]);
+    }
+  } catch {}
+  return 0;
+}
+
+function migrateLegacyApiPort() {
+  try {
+    const text = fs.readFileSync(CONFIG, 'utf8');
+    if (!/listen:\s*"127\.0\.0\.1:1984"/.test(text)) return;
+    const next = text.replace(/listen:\s*"127\.0\.0\.1:1984"/, 'listen: "127.0.0.1:19840"');
+    const tmp = CONFIG + '.tmp';
+    fs.writeFileSync(tmp, next, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, CONFIG);
+  } catch {}
+}
+
+// 旧版的 1984 可能被远程/串流软件占用，升级时自动迁到 19840
+migrateLegacyApiPort();
+const API_PORT = readApiPort() || 19840;
+const API_URL = `http://127.0.0.1:${API_PORT}`;
 const QR_PORT = 1985;
 const PROBE = process.argv.includes('--probe');
 

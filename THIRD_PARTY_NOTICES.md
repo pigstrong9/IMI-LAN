@@ -9,7 +9,8 @@
 ## go2rtc（MIT）
 
 - 项目：https://github.com/AlexxIT/go2rtc
-- 使用方式：捆绑 `go2rtc.exe`；`web/video-rtc.js` 来自其 MIT 许可的播放器。
+- 使用方式：捆绑 `go2rtc.exe`；fnOS 版在构建时下载 1.9.15 源码并应用 `fpk/patches/xiaomi-login.patch`，交叉编译出 Linux 版；`web/video-rtc.js` 来自其 MIT 许可的播放器。
+- 补丁内容：小米登录 `finishAuth` 请求携带 `passToken`/`userId` Cookie，修复 401；登录成功后把轮换的 `passToken` 写回配置，避免引擎重启要求重新扫码；配置写入改为临时文件原子替换并保持 0600；补丁本身同样按 MIT 使用。
 - 版权：Copyright (c) 2022 Alexey Khit
 
 ```
@@ -65,4 +66,9 @@ SOFTWARE.
 
 - 项目：https://www.electronjs.org （MIT）
 - 使用方式：`desktop/` 用它打包桌面版；`desktop/node_modules/` 与 `desktop/dist/` 都不入库。
+
+## Node.js（MIT）· 仅 fnOS 版依赖
+
+- 项目：https://nodejs.org （MIT）
+- 使用方式：fnOS 版在 `manifest` 里声明 `install_dep_apps=nodejs_v22`，由飞牛应用中心安装运行时并调用它启动二维码助手；本项目**不随包分发** Node.js 二进制。
 - 说明：electron-packager 的产物自带 `LICENSE` 和 `LICENSES.chromium.html`（Chromium 及其依赖的完整第三方声明）。若要分发便携版，这两个文件必须一起保留。

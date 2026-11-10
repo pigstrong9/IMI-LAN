@@ -24,7 +24,38 @@ const HELPER_LOG = path.join(LOG_DIR, 'qr-login.log');
 const GO2RTC_LOG = path.join(LOG_DIR, 'go2rtc-console.log');
 
 const API_HOST = process.env.IMI_API_HOST || '127.0.0.1';
-const API_PORT = Number(process.env.IMI_API_PORT || 1984);
+
+function readApiPortFromConfig() {
+  try {
+    const lines = fs.readFileSync(CONFIG, 'utf8').split(/\r?\n/);
+    let inApi = false;
+    for (const line of lines) {
+      if (/^api:\s*$/.test(line)) { inApi = true; continue; }
+      if (inApi && /^\S/.test(line)) break;
+      if (!inApi) continue;
+      const m = line.match(/^\s+listen:\s*"[^"]*:(\d+)"/);
+      if (m) return Number(m[1]);
+    }
+  } catch {}
+  return 0;
+}
+
+// Windows 旧安装的配置还是 127.0.0.1:1984；1984 现在常被远程软件占用。
+// 新版本统一迁到 19840，仅限本机默认配置，NAS（IMI_CONFIG/IMI_API_PORT）不动。
+function migrateLegacyApiPort() {
+  if (process.platform !== 'win32' || process.env.IMI_CONFIG || process.env.IMI_API_PORT) return;
+  try {
+    const text = fs.readFileSync(CONFIG, 'utf8');
+    if (!/listen:\s*"127\.0\.0\.1:1984"/.test(text)) return;
+    const next = text.replace(/listen:\s*"127\.0\.0\.1:1984"/, 'listen: "127.0.0.1:19840"');
+    const tmp = CONFIG + '.tmp';
+    fs.writeFileSync(tmp, next, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, CONFIG);
+  } catch {}
+}
+
+migrateLegacyApiPort();
+const API_PORT = Number(process.env.IMI_API_PORT || readApiPortFromConfig() || 19840);
 const HELPER_HOST = process.env.IMI_HELPER_HOST || '127.0.0.1';
 const HELPER_PORT = Number(process.env.IMI_HELPER_PORT || 1985);
 // NAS 版由同一容器里的网关启动引擎，重启走 go2rtc 自带的 /api/restart
@@ -257,7 +288,7 @@ function saveToken(user, token) {
     try { fs.chmodSync(CONFIG, 0o600); } catch {}
   }
   roomsCache = { key: '', at: 0, data: null };
-  authCache = { key: '', at: 0, auth: null };
+  authCache = { key: '', at: 0, auth: null, token: '' };
   roomsFail = { key: '', at: 0, message: '' };
   log(`token saved for ${mask(user)}`);
 }
@@ -276,7 +307,7 @@ const CLOUD_HOSTS = {
 };
 
 let roomsCache = { key: '', at: 0, data: null };
-let authCache = { key: '', at: 0, auth: null };
+let authCache = { key: '', at: 0, auth: null, token: '' };
 let roomsFail = { key: '', at: 0, message: '' };
 const ROOMS_TTL = 10 * 60 * 1000;
 const AUTH_TTL = 10 * 60 * 1000;
@@ -412,15 +443,15 @@ function once(key, task) {
 
 function getAuth(user, token, force = false) {
   const key = user;
-  if (force && authCache.key === key) authCache = { key: '', at: 0, auth: null };
+  if (force && authCache.key === key) authCache = { key: '', at: 0, auth: null, token: '' };
   return once(`login:${key}`, async () => {
     // 排队等锁期间，前一个调用可能已经登录完了
     if (authCache.auth && authCache.key === key && Date.now() - authCache.at < AUTH_TTL) {
-      return authCache.auth;
+      return { auth: authCache.auth, token: authCache.token };
     }
     const auth = await cloudLogin(user, token);
-    authCache = { key, at: Date.now(), auth };
-    return auth;
+    authCache = { key, at: Date.now(), auth, token };
+    return { auth, token };
   });
 }
 
@@ -430,10 +461,17 @@ function fetchRooms(user, region) {
 
 // 小米会在登录时轮换 passToken。go2rtc 只在内存里用新 token，
 // 这里把轮换后的值写回配置，避免引擎重启后又拿旧 token 要求重新扫码。
-function persistRefreshedToken(user, token, auth) {
+// authToken 是创建该会话时使用的 token；和配置不一致时说明配置已被引擎更新，
+// 绝不能把旧会话里的 token 写回去。
+function persistRefreshedToken(user, configToken, auth, authToken) {
+  if (authToken !== configToken) return;
   const next = auth?.session?.cookies?.get('passToken') || '';
-  if (!next || next === token) return;
+  if (!next || next === configToken) return;
   try {
+    // 写前再读一次，避免覆盖另一个进程刚写好的新 token
+    const current = readXiaomiTokens()[user] || '';
+    if (current !== configToken) return;
+
     const original = fs.readFileSync(CONFIG);
     let text = original.toString('utf8').replace(/^\uFEFF/, '');
     const eol = text.includes('\r\n') ? '\r\n' : '\n';
@@ -458,7 +496,12 @@ function persistRefreshedToken(user, token, auth) {
       ([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`
     )];
     lines.splice(start, end - start, ...block);
-    fs.writeFileSync(CONFIG, lines.join(eol), 'utf8');
+    const tmp = CONFIG + '.tmp';
+    fs.writeFileSync(tmp, lines.join(eol), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, CONFIG);
+    if (process.platform !== 'win32') {
+      try { fs.chmodSync(CONFIG, 0o600); } catch {}
+    }
     log(`token refreshed for ${mask(user)}`);
   } catch (e) {
     log(`token refresh failed: ${e.message}`);
@@ -479,15 +522,18 @@ async function loadRooms(user, region) {
     const token = tokens[user];
     if (!token) throw new Error('没有可用的登录令牌');
 
-    let auth = await getAuth(user, token);
-    persistRefreshedToken(user, token, auth);
+    let login = await getAuth(user, token);
+    let auth = login.auth;
+    persistRefreshedToken(user, token, auth, login.token);
     const homeBody = { limit: 150, fetch_share: true, fetch_share_dev: true, plat_form: 0, app_ver: 9 };
     let home;
     try {
       home = await cloudRequest(auth, region, '/v2/homeroom/gethome', homeBody);
     } catch (e) {
       if (!/HTTP 401/.test(e.message)) throw e;
-      auth = await getAuth(user, token, true);
+      login = await getAuth(user, token, true);
+      auth = login.auth;
+      persistRefreshedToken(user, token, auth, login.token);
       home = await cloudRequest(auth, region, '/v2/homeroom/gethome', homeBody);
     }
 

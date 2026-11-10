@@ -23,19 +23,27 @@ if "%USING_PORTABLE%"=="1" (
   if exist "%PROJECT%\qr-login.js" copy /Y "%PROJECT%\qr-login.js" "%RUNTIME%\qr-login.js" >nul
 )
 
-set "URL=http://127.0.0.1:1984/?t=%RANDOM%"
+set "URL=http://127.0.0.1:19840/?t=%RANDOM%"
 
-rem Start the shared go2rtc engine.
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "if (-not (Get-NetTCPConnection -LocalPort 1984 -State Listen -ErrorAction SilentlyContinue)) { Start-Process -FilePath '%ENGINE%' -ArgumentList '-config','%CONFIG%' -WorkingDirectory '%RUNTIME%' -WindowStyle Hidden }"
-
-rem Start the shared QR helper from the same runtime.
+rem Start the shared QR helper first: it migrates the legacy 1984 config to 19840.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if (-not (Get-NetTCPConnection -LocalPort 1985 -State Listen -ErrorAction SilentlyContinue)) { $runner = '%RUNTIME%\IMI-LAN.exe'; if (-not (Test-Path $runner)) { $runner = '%PROJECT%\desktop\node_modules\electron\dist\electron.exe' }; if (Test-Path $runner) { $env:ELECTRON_RUN_AS_NODE = '1'; Start-Process -FilePath $runner -ArgumentList ('\"%HELPER%\"') -WorkingDirectory '%RUNTIME%' -WindowStyle Hidden } else { $node = (Get-Command node.exe -ErrorAction SilentlyContinue).Source; if ($node) { Start-Process -FilePath $node -ArgumentList ('\"%HELPER%\"') -WorkingDirectory '%RUNTIME%' -WindowStyle Hidden } } }"
 
+rem Wait until the helper is listening, about 10 seconds max.
+for /l %%i in (1,1,10) do (
+  powershell -NoProfile -Command "try { $c=New-Object Net.Sockets.TcpClient('127.0.0.1',1985); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>nul
+  if not errorlevel 1 goto helper_ready
+  ping -n 2 127.0.0.1 >nul
+)
+
+:helper_ready
+rem Start the shared go2rtc engine.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "if (-not (Get-NetTCPConnection -LocalPort 19840 -State Listen -ErrorAction SilentlyContinue)) { Start-Process -FilePath '%ENGINE%' -ArgumentList '-config','%CONFIG%' -WorkingDirectory '%RUNTIME%' -WindowStyle Hidden }"
+
 rem Wait until the engine accepts connections, about 8 seconds max.
 for /l %%i in (1,1,20) do (
-  powershell -NoProfile -Command "try { $c=New-Object Net.Sockets.TcpClient('127.0.0.1',1984); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>nul
+  powershell -NoProfile -Command "try { $c=New-Object Net.Sockets.TcpClient('127.0.0.1',19840); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>nul
   if not errorlevel 1 goto ready
   ping -n 2 127.0.0.1 >nul
 )

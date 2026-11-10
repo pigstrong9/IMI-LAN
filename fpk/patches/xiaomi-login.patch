@@ -42,3 +42,37 @@
  	}
  
  	body, err := io.ReadAll(res.Body)
+--- a/internal/xiaomi/xiaomi.go
++++ b/internal/xiaomi/xiaomi.go
+@@ -68,6 +68,11 @@
+ 	if err := cloud.LoginWithToken(userID, tokens[userID]); err != nil {
+ 		return nil, err
+ 	}
++	if _, newToken := cloud.UserToken(); newToken != "" && newToken != tokens[userID] {
++		if err := app.PatchConfig([]string{"xiaomi", userID}, newToken); err == nil {
++			tokens[userID] = newToken
++		}
++	}
+ 	if clouds == nil {
+ 		clouds = map[string]*xiaomi.Cloud{userID: cloud}
+ 	} else {
+--- a/internal/app/config.go
++++ b/internal/app/config.go
+@@ -37,7 +37,16 @@
+ 		return err
+ 	}
+ 
+-	return os.WriteFile(ConfigPath, b, 0644)
++	// 配置里有登录令牌：原子替换，避免与扫码助手并发写时写坏文件
++	tmp := ConfigPath + ".tmp"
++	if err := os.WriteFile(tmp, b, 0600); err != nil {
++		return err
++	}
++	if err := os.Rename(tmp, ConfigPath); err != nil {
++		_ = os.Remove(tmp)
++		return err
++	}
++	return nil
+ }
+ 
+ type flagConfig []string

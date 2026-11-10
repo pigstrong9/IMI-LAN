@@ -1,5 +1,5 @@
 api:
-  listen: "127.0.0.1:1984"
+  listen: "127.0.0.1:19840"
   static_dir: "web"
 
 rtsp:

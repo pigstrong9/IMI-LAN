@@ -55,7 +55,10 @@ if [ ! -s "${SECRET_FILE}" ]; then
     chmod 600 "${SECRET_FILE}" 2>/dev/null || true
 fi
 
-if [ ! -f "${CONFIG}" ]; then
+[ -s "${PASS_FILE}" ] || fail "访问密码写入失败"
+[ -s "${SECRET_FILE}" ] || fail "网关密钥生成失败"
+
+if [ ! -s "${CONFIG}" ]; then
     FFMPEG_BIN="ffmpeg"
     if [ -x "${APP}/bin/ffmpeg" ]; then
         FFMPEG_BIN="${APP}/bin/ffmpeg"

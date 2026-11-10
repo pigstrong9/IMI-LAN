@@ -145,5 +145,6 @@ GOPROXY=https://goproxy.cn,direct python fpk/build.py --go /path/to/go
 
 ## 已验证范围
 
-- 已在本机用隔离端口验证：fpk 结构、静态页面、密码校验与 Cookie、`/api` 反代、WebSocket 代理、`/qr/new` 能正常获取二维码；
+- 已在本机用隔离端口验证：fpk 结构、静态页面、密码校验与 Cookie、`/api` GET/POST 转发、WebSocket 代理、`/qr/new` 获取二维码、`/rooms` 房间信息；
+- 已用真实摄像头验证：经网关的 WebRTC 信令和画面（2304×1296，`RTC` 模式）正常；
 - 尚未在真实飞牛设备上执行「安装 → 启动 → 扫码 → 出画 → 卸载」全流程，首次安装时请留意应用日志。

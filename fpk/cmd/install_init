@@ -1,15 +1,4 @@
 #!/bin/bash
-# 安装前检查：本包只提供 x86_64 二进制
-set -u
-
-case "${TRIM_SYS_ARCH:-}" in
-    x86_64|amd64)
-        exit 0
-        ;;
-    *)
-        if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
-            echo "IMI-LAN 目前只提供 x86_64 安装包，当前系统架构为 ${TRIM_SYS_ARCH:-未知}。" > "${TRIM_TEMP_LOGFILE}"
-        fi
-        exit 1
-        ;;
-esac
+# 安装前检查：架构由 manifest 的 platform=x86 负责，这里不再重复判断。
+# 注意：fnOS 的 TRIM_SYS_ARCH 是 x86/arm 这类平台名，不是 uname -m。
+exit 0

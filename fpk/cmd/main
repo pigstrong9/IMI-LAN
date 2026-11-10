@@ -105,7 +105,7 @@ start_helper() {
     IMI_RESTART_MODE=api \
     nohup "${node}" "${QR_JS}" >> "${VAR}/qr-login.log" 2>&1 &
     echo $! > "${VAR}/qr.pid"
-    if wait_port "${HELPER_PORT}" 20; then
+    if wait_port "${HELPER_PORT}" 20 && pid_alive "$(read_pid "${VAR}/qr.pid")" "${QR_JS}"; then
         log "qr helper up pid=$(read_pid "${VAR}/qr.pid")"
     else
         log "qr helper did not open port ${HELPER_PORT}"
