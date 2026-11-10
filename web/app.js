@@ -18,8 +18,9 @@ const state = {
   devices: [],
   viewer: null,          // {name, player, recorder, microphone}
   paused: new Set(loadJSON('imi.paused', [])),   // 用户手动暂停的摄像头
-  settings: { layout: '2x2', display: 'ratio', hideBattery: true, keepAlive: true, bgSleep: true, ...loadJSON('imi.settings', {}) },
+  settings: { layout: '1x1', gridLayout: '2x2', scope: 'room', display: 'fill', hideBattery: true, keepAlive: true, bgSleep: true, theme: 'auto', roomLayouts: {}, ...loadJSON('imi.settings', {}) },
   streamUrls: {},        // name -> 配置里的流地址（/api/streams 激活后不含 url）
+  roomData: cachedRooms(), // 本地助手 /rooms 返回的米家房间与设备映射（启动时先用上次缓存）
 };
 
 // 后台保持连接最多维持 2 分钟，之后释放视频解码与引擎缓冲，回到前台自动重连
@@ -29,6 +30,8 @@ const RESUME_STAGGER_MS = 450;
 let bgTimer = 0;
 let resumeToken = 0;
 let pollTimers = [];
+let authToastAt = 0;
+let roomSyncFailed = false;
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                             */
@@ -41,6 +44,11 @@ function loadJSON(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function cachedRooms() {
+  const data = loadJSON('imi.rooms', null);
+  return data && Array.isArray(data.devices) ? data : null;
 }
 
 function saveMeta() {
@@ -103,6 +111,177 @@ function shortModel(model) {
   return String(model || '').replace(/^chuangmi\.camera\./, '').replace(/^mijia\.camera\./, 'mijia.');
 }
 
+function icon(id, cls = 'ic') {
+  return `<svg class="${cls}"><use href="#${id}"/></svg>`;
+}
+
+function maskUser(value) {
+  const s = String(value || '');
+  if (!s) return '未登录';
+  if (s.length <= 4) return '****';
+  if (s.length <= 6) return s.slice(0, 2) + '****' + s.slice(-2);
+  if (s.length <= 9) return s.slice(0, 3) + '****' + s.slice(-3);
+  return s.slice(0, 3) + '****' + s.slice(-4);
+}
+
+function fallbackRoomLabel(name) {
+  const title = state.meta[name]?.name || name;
+  return String(title).replace(/摄像头$/, '').trim() || title;
+}
+
+function streamDid(name) {
+  const metaDid = state.meta[name]?.did;
+  if (metaDid) return String(metaDid);
+  const url = streamUrl(name);
+  if (url) {
+    try {
+      const did = new URL(url).searchParams.get('did');
+      if (did) return did;
+    } catch {}
+  }
+  const m = String(name).match(/^cam_(\d+)/);
+  return m ? m[1] : '';
+}
+
+function roomDevice(name) {
+  const did = streamDid(name);
+  if (!did || !state.roomData?.devices) return null;
+  return state.roomData.devices.find(d => String(d.did) === did) || null;
+}
+
+function roomLabel(name) {
+  return roomDevice(name)?.room || fallbackRoomLabel(name);
+}
+
+function displayCameraName(name) {
+  return state.meta[name]?.name || name;
+}
+
+function cameraOnline(name) {
+  const device = roomDevice(name);
+  if (device) return !!device.online;
+  return isOnline(name);
+}
+
+function roomIcon(label) {
+  if (/卧|床|主卧|次卧/.test(label)) return 'i-bed';
+  if (/餐|厨|饭/.test(label)) return 'i-dining';
+  if (/客厅|沙发|起居|厅/.test(label)) return 'i-sofa';
+  if (/儿童|宝宝|婴儿|nursery/i.test(label)) return 'i-crib';
+  if (/门|玄关|入户|阳台|院|花园/.test(label)) return 'i-door';
+  return 'i-camera';
+}
+
+function layoutName(layout) {
+  return { '1x1': '1窗口', '2x2': '4窗口', '3x2': '6窗口', '3x3': '9窗口', all: '全部' }[layout] || '1窗口';
+}
+
+function layoutIcon(layout) {
+  return { '1x1': 'i-grid1', '2x2': 'i-grid2', '3x2': 'i-grid3', '3x3': 'i-grid9' }[layout] || 'i-grid1';
+}
+
+function themeMode() {
+  return state.settings.theme || 'auto';
+}
+
+function applyTheme(mode, persist = true) {
+  state.settings.theme = mode;
+  if (persist) saveSettings();
+  const dark = mode === 'dark' || (mode === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const btn = $('#btnTheme');
+  if (btn) {
+    btn.innerHTML = icon(mode === 'auto' ? 'i-auto' : mode === 'light' ? 'i-sun' : 'i-moon');
+    btn.title = `主题：${mode === 'auto' ? '跟随系统' : mode === 'light' ? '亮色' : '暗色'}（点击切换）`;
+  }
+  $$('#themeSeg [data-theme]').forEach(b => b.classList.toggle('on', b.dataset.theme === mode));
+}
+
+function cycleTheme() {
+  const order = ['auto', 'light', 'dark'];
+  applyTheme(order[(order.indexOf(themeMode()) + 1) % order.length]);
+}
+
+function updateLayoutUI() {
+  const layout = state.settings.layout;
+  const label = $('#layoutLabel');
+  if (label) label.textContent = layoutName(layout);
+  const ico = $('#layoutIcon use');
+  if (ico) ico.setAttribute('href', '#' + layoutIcon(layout));
+  $$('#layoutMenu [data-layout]').forEach(b => b.classList.toggle('on', b.dataset.layout === layout));
+  $$('#layoutTiles [data-layout-grid]').forEach(b => b.classList.toggle('on', b.dataset.layoutGrid === layout));
+  const sel = $('#setLayout');
+  if (sel) sel.value = layout;
+  const tools = $('#gridTools');
+  if (tools) tools.hidden = layout === '1x1';
+  const dsel = $('#setDisplay');
+  if (dsel) dsel.value = state.settings.display === 'fill' ? 'fill' : 'ratio';
+  $$('#displaySeg [data-display]').forEach(b => b.classList.toggle('on', b.dataset.display === (state.settings.display === 'fill' ? 'fill' : 'ratio')));
+}
+
+function closeLayoutMenu() {
+  $('#layoutMenu')?.classList.remove('on');
+  $('#btnLayout')?.setAttribute('aria-expanded', 'false');
+}
+
+function layoutScopeKey() {
+  if (state.settings.scope === 'all') return 'all';
+  const name = state.settings.single;
+  return name ? roomLabel(name) : '';
+}
+
+function rememberLayout() {
+  if (!state.settings.roomLayouts || typeof state.settings.roomLayouts !== 'object') {
+    state.settings.roomLayouts = {};
+  }
+  const key = layoutScopeKey();
+  if (key) state.settings.roomLayouts[key] = state.settings.layout;
+}
+
+function savedLayoutFor(key) {
+  const saved = state.settings.roomLayouts?.[key];
+  return LAYOUTS[saved] ? saved : (state.settings.gridLayout || '2x2');
+}
+
+function selectLayout(layout) {
+  if (!LAYOUTS[layout] && layout !== 'all') layout = '2x2';
+  state.settings.layout = layout;
+  if (layout === 'all') state.settings.scope = 'all';
+  if (layout !== '1x1' && layout !== 'all') state.settings.gridLayout = layout;
+  const key = layoutScopeKey();
+  if (key) {
+    if (!state.settings.roomLayouts || typeof state.settings.roomLayouts !== 'object') {
+      state.settings.roomLayouts = {};
+    }
+    state.settings.roomLayouts[key] = layout;
+  }
+  saveSettings();
+  closeLayoutMenu();
+  updateLayoutUI();
+  refreshStreams();
+}
+
+function selectRoom(name) {
+  rememberLayout();
+  state.settings.single = name;
+  state.settings.scope = 'room';
+  state.settings.layout = savedLayoutFor(roomLabel(name));
+  saveSettings();
+  closeLayoutMenu();
+  updateLayoutUI();
+  refreshStreams();
+}
+
+function selectAllRooms() {
+  rememberLayout();
+  state.settings.scope = 'all';
+  state.settings.layout = savedLayoutFor('all');
+  saveSettings();
+  closeLayoutMenu();
+  updateLayoutUI();
+  refreshStreams();
+}
+
 const LAYOUTS = {
   '1x1': { cols: 1, limit: 1 },
   '2x2': { cols: 2, limit: 4 },
@@ -127,19 +306,17 @@ function fitGrid(count) {
   }
 
   const spec = layoutSpec();
+  const cols = spec.cols;
   const gap = parseFloat(getComputedStyle(grid).columnGap) || 16;
   const availW = grid.clientWidth;
   const availH = grid.clientHeight;
   if (!availW || !availH) return;
 
-  const foot = grid.querySelector('.card-foot');
-  const extra = (foot ? foot.offsetHeight : 32) + 2;
-
-  const rows = Math.max(1, Math.ceil(count / spec.cols));
-  const byWidth = (availW - gap * (spec.cols - 1)) / spec.cols;
-  const byHeight = ((availH - gap * (rows - 1)) / rows - extra) * 16 / 9;
+  const rows = spec.limit ? Math.ceil(spec.limit / cols) : Math.max(1, Math.ceil(count / cols));
+  const byWidth = (availW - gap * (cols - 1)) / cols;
+  const byHeight = (availH - gap * (rows - 1)) / rows * 16 / 9;
   const width = Math.max(200, Math.floor(Math.min(byWidth, byHeight)));
-  const rowH = Math.ceil((width - 2) * 9 / 16 + extra);
+  const rowH = Math.ceil((width - 2) * 9 / 16);
   grid.style.setProperty('--grid-card-w', width + 'px');
   grid.style.setProperty('--grid-row-h', rowH + 'px');
 }
@@ -156,6 +333,83 @@ function cameraList() {
   return Object.keys(state.streams).filter(name =>
     !state.settings.hideBattery || !isBatteryModel(streamInfo(name).model)
   );
+}
+
+function cardStatus(name) {
+  const card = state.cards.get(name);
+  if (!card) return 'live';
+  if (card.isSuspended?.()) return 'warn';
+  return card.isLive?.() ? 'live' : 'err';
+}
+
+// 单路模式只会挂载当前摄像头；未挂载的设备按“已配置在线”处理，
+// 已挂载则以播放器实际状态为准。
+function isOnline(name) {
+  const card = state.cards.get(name);
+  if (!card) return true;
+  if (card.isSuspended?.()) return true;
+  return !!card.isLive?.();
+}
+
+function updateOnlineStatus() {
+  const names = cameraList();
+  const live = names.filter(cameraOnline).length;
+  const foot = $('#footOnline');
+  if (foot) foot.textContent = `${live} / ${names.length} 路在线`;
+
+  const badge = $('#onlineBadge');
+  if (!badge) return;
+  if (state.settings.layout === '1x1') {
+    const active = state.settings.single;
+    const card = state.cards.get(active);
+    const on = card ? !!card.isLive?.() : cameraOnline(active);
+    badge.className = 'online-badge' + (on ? '' : card || roomDevice(active) ? ' warn' : ' err');
+    badge.innerHTML = `<i></i>${on ? '在线' : card || roomDevice(active) ? '连接中' : '离线'}`;
+  } else {
+    badge.className = 'online-badge';
+    badge.innerHTML = `<i></i>${live}/${names.length} 在线`;
+  }
+}
+
+function renderRooms() {
+  const box = $('#roomList');
+  if (!box) return;
+  const names = cameraList();
+  if (!names.length) {
+    box.innerHTML = '<div class="room-empty">还没有<br>摄像头</div>';
+    updateOnlineStatus();
+    return;
+  }
+
+  const groups = new Map();
+  for (const name of names) {
+    const label = roomLabel(name);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(name);
+  }
+
+  const allLive = names.filter(cameraOnline).length;
+  const scopeAll = state.settings.scope === 'all';
+  const activeRoom = scopeAll ? '' : roomLabel(state.settings.single || '');
+  let html = '';
+  for (const [label, group] of groups) {
+    const live = group.filter(cameraOnline).length;
+    const active = !scopeAll && label === activeRoom;
+    html += `
+      <button class="room ${active ? 'on' : ''}" data-room="${escapeHTML(group[0])}" title="${escapeHTML(label)} · ${live}/${group.length} 在线" aria-current="${active ? 'true' : 'false'}">
+        <span class="room-ico">${icon(roomIcon(label))}<i class="room-dot ${live ? '' : 'err'}"></i></span>
+        <b>${escapeHTML(label)}</b>
+        <em>${live}/${group.length}</em>
+      </button>`;
+  }
+  html += `
+    <button class="room ${scopeAll ? 'on' : ''}" data-all="1" title="全部房间 · ${allLive}/${names.length} 在线" aria-current="${scopeAll ? 'true' : 'false'}">
+      <span class="room-ico">${icon('i-grid9')}</span>
+      <b>全部房间</b>
+      <em>${allLive}/${names.length}</em>
+    </button>`;
+  box.innerHTML = html;
+  updateOnlineStatus();
 }
 
 /* 信号条：按摄像头下行码率估算，1 格红 / 2-3 格黄 / 4-5 格绿 */
@@ -211,6 +465,7 @@ async function pollSignals() {
       const level = levelForRate(ema);
       card.setSignal(level, `链路质量 ${level}/5 · 下载 ${ema.toFixed(2)} Mbps`);
     }
+    updateOnlineStatus();
   } catch {}
   signalBusy = false;
 }
@@ -343,24 +598,31 @@ async function refreshStreams() {
   await ensureStreamUrls(allNames);
   const spec = layoutSpec();
 
-  const candidates = allNames.filter(name => {
-    return !state.settings.hideBattery || !isBatteryModel(streamInfo(name).model);
-  });
+  const candidates = cameraList();
+  if (candidates.length && !candidates.includes(state.settings.single)) {
+    state.settings.single = candidates[0];
+    saveSettings();
+  }
+
+  let pool = candidates;
+  if (state.settings.layout !== '1x1' && state.settings.scope === 'room' && state.settings.single) {
+    const activeRoom = roomLabel(state.settings.single);
+    const scoped = candidates.filter(name => roomLabel(name) === activeRoom);
+    if (scoped.length) pool = scoped;
+  }
+
   let visible;
   if (state.settings.layout === '1x1') {
-    // 引擎刚启动时 /api/streams 可能暂时为空，此时不要清掉用户已选的摄像头
-    if (candidates.length && !candidates.includes(state.settings.single)) {
-      state.settings.single = candidates[0];
-      saveSettings();
-    }
-    visible = candidates.includes(state.settings.single)
+    visible = pool.includes(state.settings.single)
       ? [state.settings.single]
-      : (candidates[0] ? [candidates[0]] : []);
+      : (pool[0] ? [pool[0]] : []);
   } else {
-    visible = candidates;
+    visible = pool;
     if (spec.limit) visible = visible.slice(0, spec.limit);
   }
   updateSingleNav(candidates);
+
+  $('#grid').querySelectorAll('.grid-slot').forEach(el => el.remove());
 
   visible.forEach((name, i) => {
     if (!state.cards.has(name)) createCard(name, i * 600);
@@ -374,19 +636,38 @@ async function refreshStreams() {
   }
 
   const grid = $('#grid');
-  grid.style.setProperty('--grid-cols', String(spec.cols));
-  grid.classList.toggle('fit', state.settings.layout !== 'all');
-  grid.classList.toggle('fill', state.settings.layout !== 'all' && state.settings.display === 'fill');
+  const single = state.settings.layout === '1x1';
+  const cols = single ? 1 : spec.cols;
+  const rows = single ? 1 : (spec.limit ? Math.ceil(spec.limit / spec.cols) : Math.max(1, Math.ceil(visible.length / spec.cols)));
+  grid.style.setProperty('--grid-cols', String(cols));
+  grid.style.setProperty('--grid-rows', String(rows));
+  grid.dataset.layout = state.settings.layout;
+  grid.classList.toggle('single', single);
+  grid.classList.toggle('fit', !single && state.settings.layout !== 'all');
+  grid.classList.toggle('fill', state.settings.display === 'fill');
 
   const hiddenCount = allNames.length - visible.length;
   $('#streamCount').textContent = hiddenCount
     ? `${allNames.length} 路视频 · 显示 ${visible.length}`
     : `${allNames.length} 路视频`;
 
+  const capacity = spec.limit || 0;
+  if (capacity > visible.length) {
+    const slots = Array.from({ length: capacity - visible.length }, () =>
+      `<button class="grid-slot" data-slot-add type="button">${icon('i-plus')}<span>空窗口</span></button>`
+    ).join('');
+    grid.insertAdjacentHTML('beforeend', slots);
+  }
+
   const empty = $('#empty');
-  empty.style.display = visible.length ? 'none' : 'block';
-  grid.style.display = visible.length ? 'grid' : 'none';
-  fitGrid(visible.length);
+  empty.style.display = visible.length ? 'none' : 'flex';
+  grid.style.display = visible.length ? (single ? 'block' : 'grid') : 'none';
+  if (single && visible.length) {
+    grid.style.removeProperty('--grid-card-w');
+    grid.style.removeProperty('--grid-row-h');
+  } else {
+    fitGrid(visible.length);
+  }
 
   if (!visible.length) {
     const title = $('#empty h2');
@@ -400,12 +681,65 @@ async function refreshStreams() {
     }
   }
 
+  updateLayoutUI();
   updateSettings();
+  renderRooms();
+  updateOnlineStatus();
 }
 
 function updateSettings() {
-  $('#setUser').textContent = state.user || '未登录';
-  $('#setRegion').textContent = regionName(state.region);
+  const masked = maskUser(state.user);
+  const userEl = $('#setUser');
+  if (userEl) userEl.textContent = masked;
+  const nameEl = $('#accountName');
+  if (nameEl) nameEl.textContent = masked;
+  const regionEl = $('#accountRegion');
+  if (regionEl) regionEl.textContent = regionName(state.region);
+  const setRegion = $('#setRegion');
+  if (setRegion) setRegion.textContent = regionName(state.region);
+}
+
+function tickClock() {
+  const d = new Date();
+  const text = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const foot = $('#footClock');
+  if (foot) foot.textContent = text;
+  const viewer = $('#viewerClock');
+  if (viewer) viewer.textContent = text;
+}
+
+async function syncRooms() {
+  if (state.pageHidden || !state.user) return;
+  try {
+    const params = new URLSearchParams({ region: state.region });
+    params.set('id', state.user);
+    const res = await fetch('http://127.0.0.1:1985/rooms?' + params.toString(), {
+      cache: 'no-store',
+      // 助手冷启动时要做一次云端登录，超时必须比服务端的 20s 宽松
+      signal: AbortSignal.timeout(25000),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok || !Array.isArray(data.devices)) {
+      throw new Error((data && data.error) || `房间助手返回 ${res.status}`);
+    }
+    state.roomData = data;
+    localStorage.setItem('imi.rooms', JSON.stringify(data));
+    roomSyncFailed = false;
+    for (const [name, card] of state.cards) {
+      const room = $('.card-title b', card.el);
+      if (room) room.textContent = roomLabel(name);
+      const hero = $('[data-role="heroName"]', card.el);
+      if (hero) hero.textContent = displayCameraName(name);
+    }
+    renderRooms();
+    updateOnlineStatus();
+  } catch (e) {
+    // 只报一次，恢复后再失败才重新提醒，避免每 5 分钟刷屏
+    if (!roomSyncFailed) {
+      roomSyncFailed = true;
+      toast(`读不到米家房间：${e.message}，暂用设备昵称显示`, true);
+    }
+  }
 }
 
 function regionName(region) {
@@ -420,8 +754,9 @@ function regionName(region) {
 
 function createCard(name, delay = 0) {
   const { meta, model, ip } = streamInfo(name);
-  const title = meta.name || name;
-
+  const title = displayCameraName(name);
+  const roomName = roomLabel(name);
+  const qualityLabel = state.meta[name]?.quality === 'sd' ? '流畅' : '高清';
   const card = document.createElement('article');
   card.className = 'card';
   card.dataset.name = name;
@@ -429,7 +764,7 @@ function createCard(name, delay = 0) {
   card.innerHTML = `
     <div class="card-head">
       <div class="card-title">
-        <b>${escapeHTML(title)}</b>
+        <b>${escapeHTML(roomName)}</b>
         <span>${escapeHTML(shortModel(model) || '米家摄像头')}</span>
       </div>
       <span class="signal" data-role="signal" data-level="0" data-tip="链路质量 · 等待数据"><i></i><i></i><i></i><i></i><i></i></span>
@@ -439,16 +774,28 @@ function createCard(name, delay = 0) {
       <div class="card-mask" data-role="mask">
         <div><div class="spinner"></div>正在建立局域网连接…</div>
       </div>
-      <div class="card-tools">
-        <button class="tool ${state.muted ? '' : 'on'}" data-act="mute" title="静音">${state.muted ? '🔇' : '🔊'}</button>
-        <button class="tool" data-act="shot" title="截图">📷</button>
-        <button class="tool" data-act="hold" title="暂停加载">⏸</button>
-        <button class="tool" data-act="open" title="全屏">⛶</button>
-        <button class="tool del" data-act="del" title="删除">🗑</button>
+      <div class="card-hero-info">
+        <b data-role="heroName" title="${escapeHTML(title)}">${escapeHTML(title)}</b>
+        <span class="hero-model" data-role="heroModel">${escapeHTML(shortModel(model) || '')}</span>
+        <span class="sep">·</span>
+        <span class="mono ip" data-role="heroIp">IP ${escapeHTML(ip || '—')}</span>
+        <span class="sep">/</span>
+        <span class="link" data-role="heroLink"></span>
+        <span class="signal" data-role="heroSignal" data-level="0" data-tip="链路质量 · 等待数据"><i></i><i></i><i></i><i></i><i></i></span>
       </div>
+      <div class="card-tools">
+        <button class="tool ${state.muted ? '' : 'on'}" data-act="mute" title="静音">${icon(state.muted ? 'i-muted' : 'i-volume')}</button>
+        <button class="tool" data-act="shot" title="截图">${icon('i-shot')}</button>
+        <button class="tool" data-act="hold" title="暂停加载">${icon('i-pause')}</button>
+        <button class="tool quality-tool" data-act="quality" title="切换画质"><span data-quality-label>${qualityLabel}</span></button>
+        <button class="tool" data-act="open" title="全屏">${icon('i-expand')}</button>
+        <button class="tool del" data-act="del" title="删除">${icon('i-trash')}</button>
+      </div>
+      <button class="hero-expand" data-act="open" title="全屏查看" aria-label="全屏查看">${icon('i-expand')}</button>
+      <button class="card-menu-btn" data-act="menu" title="更多操作" aria-label="更多操作">${icon('i-more')}</button>
     </div>
     <div class="card-foot">
-      <span class="model">${escapeHTML(model || '')}</span>
+      <span class="model">${escapeHTML(shortModel(model) || '')}</span>
       <span class="spacer"></span>
       <span class="link" data-role="link"></span>
       <span class="ip">${escapeHTML(ip || '')}</span>
@@ -459,7 +806,9 @@ function createCard(name, delay = 0) {
   const mask = $('[data-role="mask"]', card);
   const badge = $('[data-role="badge"]', card);
   const signal = $('[data-role="signal"]', card);
+  const heroSignal = $('[data-role="heroSignal"]', card);
   const link = $('[data-role="link"]', card);
+  const heroLink = $('[data-role="heroLink"]', card);
 
   let player = null;
   let timer = 0;
@@ -491,18 +840,23 @@ function createCard(name, delay = 0) {
   }
 
   function setSignal(level, text) {
-    signal.dataset.level = String(level);
-    signal.dataset.tip = text;
+    for (const el of [signal, heroSignal]) {
+      if (!el) continue;
+      el.dataset.level = String(level);
+      el.dataset.tip = text;
+    }
   }
 
   function spinnerMask() {
     mask.innerHTML = '<div><div class="spinner"></div>正在建立局域网连接…</div>';
   }
 
-  function errorMask(title, detail) {
+  function errorMask(title, detail, withLogin = false) {
     mask.innerHTML = `<div><div class="mask-title">${escapeHTML(title)}</div>${
       detail ? `<div class="mask-sub">${escapeHTML(detail)}</div>` : ''
-    }<button class="mask-btn" data-act="retry">重试</button></div>`;
+    }<div class="mask-actions"><button class="mask-btn" data-act="retry">重试</button>${
+      withLogin ? '<button class="mask-btn" data-act="login">重新登录</button>' : ''
+    }</div></div>`;
   }
 
   function pausedMask() {
@@ -512,17 +866,24 @@ function createCard(name, delay = 0) {
   function updateHoldButton() {
     const btn = $('[data-act="hold"]', card);
     if (!btn) return;
-    btn.textContent = suspended ? '▶' : '⏸';
+    btn.innerHTML = icon(suspended ? 'i-play' : 'i-pause');
     btn.title = suspended ? '继续加载' : '暂停加载';
     btn.classList.toggle('on', suspended);
   }
 
-  // 持续重连：5s → 10s → 20s → 30s 封顶；手动暂停后完全停止
+  // 持续重连：5s → 10s → 20s → 30s 封顶；401/令牌失效时退到 5 分钟，避免把小米风控拖长
   function scheduleRetry(title = '连接失败') {
     if (suspended || retryTimer || state.pageHidden) return;
     retryCount += 1;
-    const delay = Math.min(30000, 5000 * 2 ** (retryCount - 1));
-    errorMask(title, `${lastError || '连接中断'} · ${Math.round(delay / 1000)}s 后进行第 ${retryCount} 次重连`);
+    const authFail = /401|unauthorized|令牌|登录/i.test(String(lastError || ''));
+    const delay = authFail ? 300000 : Math.min(30000, 5000 * 2 ** (retryCount - 1));
+    if (authFail && Date.now() - authToastAt > 600000) {
+      authToastAt = Date.now();
+      toast('登录已失效，请点右上角账号重新扫码', true);
+    }
+    errorMask(authFail ? '登录已失效' : title, authFail
+      ? '请重新扫码登录 · 5 分钟后自动重试'
+      : `${lastError || '连接中断'} · ${Math.round(delay / 1000)}s 后进行第 ${retryCount} 次重连`, authFail);
     retryTimer = setTimeout(() => {
       retryTimer = 0;
       if (suspended) return;
@@ -587,7 +948,9 @@ function createCard(name, delay = 0) {
       onMode: text => {
         if (suspended || !player) return;
         const mode = String(text || '').toUpperCase();
-        link.textContent = mode === 'LOADING' ? '' : mode;
+        const value = mode === 'LOADING' ? '' : mode;
+        link.textContent = value;
+        if (heroLink) heroLink.textContent = value;
       },
     });
     media.insertBefore(player.el, media.querySelector('.card-tools'));
@@ -707,20 +1070,30 @@ function createCard(name, delay = 0) {
   }
 
   card.addEventListener('click', ev => {
-    const act = ev.target.closest('[data-act]')?.dataset.act;
-    if (!act) return;
+    const btn = ev.target.closest('[data-act]');
+    if (!btn) return;
+    const act = btn.dataset.act;
+    if (act === 'menu') {
+      const open = card.classList.contains('menu-open');
+      $$('.card.menu-open').forEach(el => el.classList.remove('menu-open'));
+      card.classList.toggle('menu-open', !open);
+      return;
+    }
+    card.classList.remove('menu-open');
     if (act === 'mute') {
       const v = player?.video;
       if (!v) return;
       v.muted = !v.muted;
-      ev.target.classList.toggle('on', !v.muted);
-      ev.target.textContent = v.muted ? '🔇' : '🔊';
+      btn.classList.toggle('on', !v.muted);
+      btn.innerHTML = icon(v.muted ? 'i-muted' : 'i-volume');
       if (!v.muted) v.play().catch(() => {});
     } else if (act === 'shot') {
       snapshot(player?.video, (state.meta[name] || {}).name || title);
     } else if (act === 'hold') {
       if (suspended) resumeStream();
       else suspend();
+    } else if (act === 'quality') {
+      cycleQuality(name);
     } else if (act === 'resume') {
       resumeStream();
     } else if (act === 'open') {
@@ -730,6 +1103,8 @@ function createCard(name, delay = 0) {
       clearTimeout(retryTimer);
       retryTimer = 0;
       reload();
+    } else if (act === 'login') {
+      openRelogin();
     } else if (act === 'del') {
       deleteCamera(name, title);
     }
@@ -757,6 +1132,7 @@ function createCard(name, delay = 0) {
     onVisible,
     setSignal,
     isSuspended: () => suspended,
+    isLive: () => phase === 'live',
     get player() { return player; },
     destroy() {
       clearInterval(timer);
@@ -911,12 +1287,18 @@ function visibleCardNames() {
 }
 
 function playableCardNames() {
-  return visibleCardNames().filter(name => !state.paused.has(name));
+  return cameraList().filter(name => !state.paused.has(name));
 }
 
-function updateViewerNav() {
-  $('#btnViewerPrev').hidden = playableCardNames().length < 2;
-  $('#btnViewerNext').hidden = playableCardNames().length < 2;
+function renderViewerChips() {
+  const box = $('#viewerChips');
+  if (!box) return;
+  const names = cameraList();
+  box.innerHTML = names.map(name => {
+    const on = state.viewer?.name === name;
+    const status = cardStatus(name);
+    return `<button data-viewer-cam="${escapeHTML(name)}" class="${on ? 'on' : ''}"><i class="dot ${status}"></i>${escapeHTML(roomLabel(name))}</button>`;
+  }).join('');
 }
 
 function stepViewer(dir) {
@@ -937,6 +1319,20 @@ function releaseCardsForViewer() {
   for (const card of state.cards.values()) card.releaseForViewer();
 }
 
+function setViewerState(live) {
+  if (!state.viewer) return;
+  const meta = state.meta[state.viewer.name] || {};
+  const dot = $('#viewerDot');
+  const pill = $('#viewerState');
+  const sub = $('#viewerSub');
+  if (dot) dot.className = 'live-dot ' + (live ? '' : 'warn');
+  if (pill) {
+    pill.className = 'state-pill ' + (live ? 'live' : 'warn');
+    pill.textContent = live ? 'LIVE' : '连接中';
+  }
+  if (sub) sub.textContent = [meta.ip, live ? 'RTC' : '等待重连'].filter(Boolean).join(' · ');
+}
+
 function openViewer(name) {
   if (state.paused.has(name)) {
     toast('该摄像头已暂停，先点卡片上的「▶」继续加载', true);
@@ -945,7 +1341,8 @@ function openViewer(name) {
   if (state.viewer) closeViewer();
 
   const meta = state.meta[name] || {};
-  const title = meta.name || name;
+  const title = displayCameraName(name);
+  const live = !!state.cards.get(name)?.isLive?.();
 
   const stage = $('#viewerStage');
   stage.innerHTML = '';
@@ -957,9 +1354,12 @@ function openViewer(name) {
   let player;
   try {
     player = makePlayer(name, {
-      contain: true,
+      contain: state.settings.display === 'ratio',
       muted: initialMuted,
       microphone: false,
+      onReady: () => setViewerState(true),
+      onError: () => setViewerState(false),
+      onStatus: () => setViewerState(false),
     });
   } catch (e) {
     toast('打开大屏失败：' + e.message, true);
@@ -980,11 +1380,16 @@ function openViewer(name) {
   stage.appendChild(player.el);
 
   $('#viewerName').textContent = title;
-  $('#viewerSub').textContent = [meta.model, meta.ip].filter(Boolean).join(' · ');
-  $('#btnViewerMute').textContent = initialMuted ? '🔇' : '🔊';
+  $('#viewerModel').textContent = shortModel(meta.model || '');
+  $('#viewerDot').className = 'live-dot ' + (live ? '' : 'warn');
+  $('#viewerState').className = 'state-pill ' + (live ? 'live' : 'warn');
+  $('#viewerState').textContent = live ? 'LIVE' : '连接中';
+  $('#viewerSub').textContent = [meta.ip, live ? 'RTC' : '等待重连'].filter(Boolean).join(' · ');
+  $('#btnViewerMute').innerHTML = icon(initialMuted ? 'i-muted' : 'i-volume');
   $('#btnViewerMute').classList.toggle('on', !initialMuted);
 
-  updateViewerNav();
+  renderViewerChips();
+  tickClock();
 
   $('#modalViewer').classList.add('open');
   $('#modalViewer').setAttribute('aria-hidden', 'false');
@@ -1005,6 +1410,8 @@ function closeViewer() {
   state.viewer = null;
 
   $('#viewerStage').innerHTML = '';
+  const chips = $('#viewerChips');
+  if (chips) chips.innerHTML = '';
   $('#qualityMenu').classList.remove('open');
   $('#modalViewer').classList.remove('open');
   $('#modalViewer').setAttribute('aria-hidden', 'true');
@@ -1022,7 +1429,7 @@ function recreateViewerPlayer({ microphone } = {}) {
 
   viewer.player.destroy();
   const player = makePlayer(viewer.name, {
-    contain: true,
+    contain: state.settings.display === 'ratio',
     muted: wasMuted,
     microphone: microphone ?? viewer.microphone,
   });
@@ -1031,7 +1438,7 @@ function recreateViewerPlayer({ microphone } = {}) {
   viewer.muted = wasMuted;
   $('#viewerStage').innerHTML = '';
   $('#viewerStage').appendChild(player.el);
-  $('#btnViewerMute').textContent = wasMuted ? '🔇' : '🔊';
+  $('#btnViewerMute').innerHTML = icon(wasMuted ? 'i-muted' : 'i-volume');
   $('#btnViewerMute').classList.toggle('on', !wasMuted);
 }
 
@@ -1052,7 +1459,7 @@ function resumeViewerFromBackground() {
   if (!viewer || !viewer.bgSuspended) return;
   const muted = viewer.muted ?? state.muted;
   const player = makePlayer(viewer.name, {
-    contain: true,
+    contain: state.settings.display === 'ratio',
     muted,
     microphone: viewer.microphone || false,
   });
@@ -1060,7 +1467,7 @@ function resumeViewerFromBackground() {
   $('#viewerStage').appendChild(player.el);
   viewer.player = player;
   viewer.bgSuspended = false;
-  $('#btnViewerMute').textContent = muted ? '🔇' : '🔊';
+  $('#btnViewerMute').innerHTML = icon(muted ? 'i-muted' : 'i-volume');
   $('#btnViewerMute').classList.toggle('on', !muted);
 }
 
@@ -1096,8 +1503,11 @@ function applyMute(muted) {
   state.muted = muted;
   if (state.viewer) state.viewer.muted = muted;
 
-  $('#btnMuteAll').textContent = muted ? '🔇' : '🔊';
-  $('#btnMuteAll').classList.toggle('on', !muted);
+  const allBtn = $('#btnMuteAll');
+  if (allBtn) {
+    allBtn.innerHTML = icon(muted ? 'i-muted' : 'i-volume');
+    allBtn.classList.toggle('on', !muted);
+  }
 
   for (const card of state.cards.values()) {
     const v = card.player?.video;
@@ -1105,7 +1515,7 @@ function applyMute(muted) {
     if (v) v.muted = muted;
     const btn = $('[data-act="mute"]', card.el);
     if (btn) {
-      btn.textContent = muted ? '🔇' : '🔊';
+      btn.innerHTML = icon(muted ? 'i-muted' : 'i-volume');
       btn.classList.toggle('on', !muted);
     }
   }
@@ -1116,8 +1526,11 @@ function applyMute(muted) {
     if (!muted) viewerVideo.play().catch(() => {});
   }
   if (state.viewer) {
-    $('#btnViewerMute').textContent = muted ? '🔇' : '🔊';
-    $('#btnViewerMute').classList.toggle('on', !muted);
+    const vbtn = $('#btnViewerMute');
+    if (vbtn) {
+      vbtn.innerHTML = icon(muted ? 'i-muted' : 'i-volume');
+      vbtn.classList.toggle('on', !muted);
+    }
   }
 }
 
@@ -1135,8 +1548,12 @@ function toggleViewerFullscreen() {
   }
 }
 
-function setRecUI(recording) {  $('#btnViewerRec').textContent = recording ? '⏹' : '⏺';
-  $('#btnViewerRec').classList.toggle('on', recording);
+function setRecUI(recording) {
+  const btn = $('#btnViewerRec');
+  if (!btn) return;
+  btn.innerHTML = icon('i-record');
+  btn.classList.toggle('on', recording);
+  btn.title = recording ? '停止录制并保存' : '录制';
 }
 
 function toggleRecord() {
@@ -1400,6 +1817,17 @@ function openAdd() {
   }
 }
 
+function openRelogin() {
+  $('#modalLogin').classList.add('open');
+  $('#modalLogin').setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  $('#loginStatus').textContent = '';
+  $('#captchaStatus').textContent = '';
+  $('#verifyStatus').textContent = '';
+  $('#loginRegion').value = state.region;
+  openLoginStep();
+}
+
 function closeAdd() {
   stopQrLogin(true);
   $('#qrImg').hidden = true;
@@ -1462,6 +1890,7 @@ async function syncDeviceMeta() {
   try {
     const data = await api(`/api/xiaomi?id=${encodeURIComponent(state.user)}&region=${encodeURIComponent(state.region)}`);
     mergeDeviceMeta(data.sources || []);
+    renderRooms();
   } catch {}
 }
 
@@ -1470,7 +1899,11 @@ async function afterLogin() {
   const list = Array.isArray(users) ? users : [];
   state.user = list.find(id => !(state.usersBefore || []).includes(id)) || list[0] || '';
   localStorage.setItem('imi.user', state.user);
+  state.roomData = null;
+  localStorage.removeItem('imi.rooms');
+  roomSyncFailed = false;
   if (!state.user) throw new Error('登录成功，但没有读到账号信息');
+  setTimeout(syncRooms, 3000);
 
   // 读取设备列表
   await loadDevices(state.user, state.region);
@@ -1498,7 +1931,7 @@ async function loadDevices(user, region) {
 
   state.devices = data.sources || [];
   mergeDeviceMeta(state.devices);
-  $('#devicesTip').textContent = `账号 ${user} · ${regionName(region)}，共 ${state.devices.length} 个设备。勾选后添加。`;
+  $('#devicesTip').textContent = `账号 ${maskUser(user)} · ${regionName(region)}，共 ${state.devices.length} 个设备。勾选后添加。`;
   renderDevices(state.devices);
 }
 
@@ -1508,13 +1941,22 @@ function applyMetaToCard(name) {
   if (!card) return;
   const el = card.el;
   const titleEl = $('.card-title b', el);
-  if (titleEl && meta.name) titleEl.textContent = meta.name;
+  if (titleEl) titleEl.textContent = roomLabel(name);
   const subEl = $('.card-title span', el);
   if (subEl) subEl.textContent = shortModel(meta.model) || '米家摄像头';
   const modelEl = $('.card-foot .model', el);
   if (modelEl) modelEl.textContent = meta.model || '';
   const ipEl = $('.card-foot .ip', el);
   if (ipEl) ipEl.textContent = meta.ip || '';
+  const heroName = $('[data-role="heroName"]', el);
+  if (heroName) {
+    heroName.textContent = displayCameraName(name);
+    heroName.title = displayCameraName(name);
+  }
+  const heroModel = $('[data-role="heroModel"]', el);
+  if (heroModel) heroModel.textContent = shortModel(meta.model) || '';
+  const heroIp = $('[data-role="heroIp"]', el);
+  if (heroIp) heroIp.textContent = 'IP ' + (meta.ip || '—');
 }
 
 // 已存在的流在换浏览器/清缓存后没有昵称，读取设备列表时顺手补回来
@@ -1650,44 +2092,70 @@ async function addSelected() {
 /* quality                                                             */
 /* ------------------------------------------------------------------ */
 
-async function changeQuality(q) {
-  const viewer = state.viewer;
-  if (!viewer) return;
-  const meta = state.meta[viewer.name];
-  if (!meta || !meta.src) {
+function updateCardQuality(name) {
+  const card = state.cards.get(name);
+  if (!card) return;
+  const label = state.meta[name]?.quality === 'sd' ? '流畅' : '高清';
+  $$('[data-quality-label]', card.el).forEach(el => { el.textContent = label; });
+}
+
+async function applyQuality(name, q) {
+  const info = streamInfo(name);
+  const meta = state.meta[name] || (state.meta[name] = {
+    name: info.meta.name || name,
+    model: info.model,
+    ip: info.ip,
+  });
+  const src0 = meta.src || streamUrl(name);
+  if (!src0) {
     toast('找不到原始流地址，无法切换画质', true);
-    return;
+    return false;
   }
 
   // 不同型号的「高清/流畅」对应不同的 subtype 编号，写死接口值会拿到错误分辨率。
-  const map = QUALITY_BY_MODEL[meta.model] || QUALITY_BY_MODEL._default;
+  const map = QUALITY_BY_MODEL[meta.model || info.model] || QUALITY_BY_MODEL._default;
   const subtype = map[q] ?? map.hd;
 
   try {
-    const u = new URL(meta.src);
+    const u = new URL(src0);
     u.searchParams.set('subtype', String(subtype));
     const src = u.toString();
 
-    await api(`/api/streams?name=${encodeURIComponent(viewer.name)}&src=${encodeURIComponent(src)}`, {
+    await api(`/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(src)}`, {
       method: 'PUT',
     });
 
     meta.src = src;
     meta.quality = q;
+    if (!meta.model) meta.model = info.model;
     saveMeta();
 
-    // 录制绑定在旧 video 元素上，切换画质前先收尾
-    if (viewer.recorder && viewer.recorder.state !== 'inactive') {
+    const viewer = state.viewer?.name === name ? state.viewer : null;
+    if (viewer?.recorder && viewer.recorder.state !== 'inactive') {
       try { viewer.recorder.stop(); } catch {}
     }
 
-    state.cards.get(viewer.name)?.reload();
-    recreateViewerPlayer();
-    $('#qualityMenu').classList.remove('open');
+    state.cards.get(name)?.reload();
+    if (viewer) recreateViewerPlayer();
+    updateCardQuality(name);
     toast(q === 'sd' ? '已切换到流畅画质，正在重连' : '已切换到高清画质，正在重连');
+    return true;
   } catch (e) {
     toast('切换失败：' + e.message, true);
+    return false;
   }
+}
+
+function cycleQuality(name) {
+  const q = state.meta[name]?.quality === 'sd' ? 'hd' : 'sd';
+  applyQuality(name, q);
+}
+
+async function changeQuality(q) {
+  const viewer = state.viewer;
+  if (!viewer) return;
+  const ok = await applyQuality(viewer.name, q);
+  if (ok) $('#qualityMenu').classList.remove('open');
 }
 
 const QUALITY_BY_MODEL = {
@@ -1703,6 +2171,8 @@ const QUALITY_BY_MODEL = {
 
 function openSettings() {
   updateSettings();
+  updateLayoutUI();
+  applyTheme(themeMode(), false);
   $('#setLayout').value = LAYOUTS[state.settings.layout] ? state.settings.layout : '2x2';
   $('#setDisplay').value = state.settings.display === 'fill' ? 'fill' : 'ratio';
   $('#setHideBattery').checked = state.settings.hideBattery !== false;
@@ -1760,6 +2230,48 @@ function bindEvents() {
   });
 
   $('#btnSettings').addEventListener('click', openSettings);
+  $('#accountBtn').addEventListener('click', openSettings);
+  $('#btnTheme').addEventListener('click', cycleTheme);
+
+  $('#btnLayout').addEventListener('click', () => {
+    const menu = $('#layoutMenu');
+    const on = !menu.classList.contains('on');
+    menu.classList.toggle('on', on);
+    $('#btnLayout').setAttribute('aria-expanded', String(on));
+  });
+  $('#layoutMenu').addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-layout]');
+    if (btn) selectLayout(btn.dataset.layout);
+  });
+  $$('#layoutTiles [data-layout-grid]').forEach(btn => {
+    btn.addEventListener('click', () => selectLayout(btn.dataset.layoutGrid));
+  });
+  $$('#themeSeg [data-theme]').forEach(btn => {
+    btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
+  });
+  $$('#displaySeg [data-display]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.settings.display = btn.dataset.display === 'fill' ? 'fill' : 'ratio';
+      saveSettings();
+      updateLayoutUI();
+      refreshStreams();
+    });
+  });
+
+  $('#roomList').addEventListener('click', ev => {
+    const all = ev.target.closest('[data-all]');
+    if (all) { selectAllRooms(); return; }
+    const room = ev.target.closest('[data-room]');
+    if (room) selectRoom(room.dataset.room);
+  });
+  $('#grid').addEventListener('click', ev => {
+    if (ev.target.closest('.grid-slot')) openAdd();
+  });
+
+  $('#viewerChips').addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-viewer-cam]');
+    if (btn) openViewer(btn.dataset.viewerCam);
+  });
 
   $$('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1852,7 +2364,8 @@ function bindEvents() {
   $('#btnRelogin').addEventListener('click', () => {
     state.user = '';
     localStorage.removeItem('imi.user');
-    openLoginStep();
+    closeSettings();
+    openRelogin();
   });
 
   $('#btnReimport').addEventListener('click', () => {
@@ -1862,9 +2375,7 @@ function bindEvents() {
   $('#btnClear').addEventListener('click', clearCameras);
 
   $('#setLayout').addEventListener('change', () => {
-    state.settings.layout = $('#setLayout').value;
-    saveSettings();
-    refreshStreams();
+    selectLayout($('#setLayout').value);
   });
   $('#btnSinglePrev').addEventListener('click', () => stepSingle(-1));
   $('#btnSingleNext').addEventListener('click', () => stepSingle(1));
@@ -1874,8 +2385,9 @@ function bindEvents() {
     refreshStreams();
   });
   $('#setDisplay').addEventListener('change', () => {
-    state.settings.display = $('#setDisplay').value;
+    state.settings.display = $('#setDisplay').value === 'fill' ? 'fill' : 'ratio';
     saveSettings();
+    updateLayoutUI();
     refreshStreams();
   });
   $('#setHideBattery').addEventListener('change', () => {
@@ -1899,8 +2411,6 @@ function bindEvents() {
 
   // viewer
   $('#btnViewerClose').addEventListener('click', closeViewer);
-  $('#btnViewerPrev').addEventListener('click', () => stepViewer(-1));
-  $('#btnViewerNext').addEventListener('click', () => stepViewer(1));
   $('#btnViewerMute').addEventListener('click', toggleViewerMute);
 
   $('#btnViewerShot').addEventListener('click', () => {
@@ -1929,6 +2439,10 @@ function bindEvents() {
     btn.addEventListener('click', () => changeQuality(btn.dataset.q));
   });
   document.addEventListener('click', ev => {
+    if (!ev.target.closest('.layout-wrap')) closeLayoutMenu();
+    if (!ev.target.closest('.card-menu-btn') && !ev.target.closest('.card-tools')) {
+      $$('.card.menu-open').forEach(el => el.classList.remove('menu-open'));
+    }
     if (!ev.target.closest('#qualityMenu') && !ev.target.closest('#btnViewerQuality')) {
       $('#qualityMenu').classList.remove('open');
     }
@@ -1943,22 +2457,37 @@ function bindEvents() {
       if (ev.key === 'ArrowRight') { ev.preventDefault(); stepViewer(1); return; }
       if (ev.key === ' ') { ev.preventDefault(); toggleViewerMute(); return; }
       if (ev.key === 'f' || ev.key === 'F') { ev.preventDefault(); toggleViewerFullscreen(); return; }
+      if (/^[1-9]$/.test(ev.key)) {
+        const name = cameraList()[Number(ev.key) - 1];
+        if (name) { ev.preventDefault(); openViewer(name); return; }
+      }
       if (ev.key === 'Escape') {
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
         else closeViewer();
         return;
       }
     }
+    const tag = document.activeElement?.tagName;
+    const typing = tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA';
+    if (!state.viewer && !typing && /^[1-9]$/.test(ev.key)) {
+      const name = cameraList()[Number(ev.key) - 1];
+      if (name) { ev.preventDefault(); selectRoom(name); return; }
+    }
+    if (!state.viewer && !typing && ev.key.toLowerCase() === 'g') {
+      ev.preventDefault();
+      selectAllRooms();
+      return;
+    }
     if (!state.viewer && state.settings.layout === '1x1'
       && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
-      const tag = document.activeElement?.tagName;
-      if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (typing) return;
       ev.preventDefault();
       stepSingle(ev.key === 'ArrowLeft' ? -1 : 1);
       return;
     }
     if (ev.key === 'Escape') {
-      if ($('#modalSettings').classList.contains('open')) closeSettings();
+      if ($('#layoutMenu').classList.contains('on')) closeLayoutMenu();
+      else if ($('#modalSettings').classList.contains('open')) closeSettings();
       else if ($('#modalLogin').classList.contains('open')) closeAdd();
     }
   });
@@ -2046,16 +2575,54 @@ function stopPolling() {
 
 async function init() {
   bindEvents();
-  $('#btnMuteAll').textContent = '🔇';
+
+  // 老版本默认是 2×2 + 16:9；升级到左右分栏后只迁移一次到单路铺满
+  const savedSettings = loadJSON('imi.settings', {});
+  if (savedSettings.uiVersion !== 2) {
+    state.settings.layout = '1x1';
+    state.settings.gridLayout = '2x2';
+    state.settings.scope = 'room';
+    state.settings.display = 'fill';
+    state.settings.uiVersion = 2;
+    saveSettings();
+  }
+
+  if (state.settings.layout === 'all') state.settings.layout = '3x3';
+  if (!['1x1', '2x2', '3x2', '3x3'].includes(state.settings.layout)) state.settings.layout = '1x1';
+  if (state.settings.layout !== '1x1') state.settings.gridLayout = state.settings.layout;
+  if (!['room', 'all'].includes(state.settings.scope)) state.settings.scope = 'room';
+
+  // 仅用于本地截图/预览，不写回设置
+  const preview = new URLSearchParams(location.search);
+  if (['auto', 'light', 'dark'].includes(preview.get('theme'))) state.settings.theme = preview.get('theme');
+  if (['1x1', '2x2', '3x2', '3x3'].includes(preview.get('layout'))) {
+    state.settings.layout = preview.get('layout');
+    if (state.settings.layout !== '1x1') state.settings.gridLayout = state.settings.layout;
+  }
+  if (preview.get('scope') === 'all') state.settings.scope = 'all';
+  if (preview.get('scope') === 'room') state.settings.scope = 'room';
+
+  applyTheme(themeMode(), false);
+  applyMute(state.muted);
+  updateLayoutUI();
+  renderRooms();
+  tickClock();
+  setInterval(tickClock, 1000);
 
   await checkEngine();
   await restoreUser();
   await refreshStreams();
-  await syncDeviceMeta();
+  // 先让引擎自己完成云端登录并出画，再让本地助手补房间信息，避免两边同时登录触发小米风控
+  setTimeout(syncDeviceMeta, 6000);
+  setTimeout(syncRooms, 3000);
 
   startPolling();
   pollSignals();
+  setInterval(syncRooms, 300000);
   window.addEventListener('resize', () => fitGrid(state.cards.size));
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (themeMode() === 'auto') applyTheme('auto', false);
+  });
 }
 
 if (document.readyState === 'loading') {

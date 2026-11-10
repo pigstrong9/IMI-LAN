@@ -1,66 +1,262 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>IMI-LAN · 局域网直连</title>
-<link rel="stylesheet" href="style.css?v=20261110g">
+<script>
+try {
+  const saved = JSON.parse(localStorage.getItem('imi.settings') || '{}');
+  const query = new URLSearchParams(location.search).get('theme');
+  const mode = query || saved.theme || 'auto';
+  const dark = mode === 'dark' || (mode === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+} catch {}
+</script>
+<link rel="stylesheet" href="style.css?v=20261110x">
 </head>
 <body>
 
-<header class="topbar">
-  <div class="brand">
-    <div class="brand-mark">◉</div>
-    <div>
-      <h1>IMI-LAN</h1>
-      <p>局域网直连 · 低延迟</p>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-iris" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <circle cx="12" cy="12" r="2.2" fill="currentColor"/>
+    <path d="M12 3.8v3.2M12 17v3.2M3.8 12h3.2M17 12h3.2M6.2 6.2l2.3 2.3M15.5 15.5l2.3 2.3M17.8 6.2l-2.3 2.3M8.5 15.5l-2.3 2.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24">
+    <rect x="3.5" y="7" width="12" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <path d="M15.5 10.5l5-2.5v8l-5-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="9" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+  </symbol>
+  <symbol id="i-bed" viewBox="0 0 24 24">
+    <path d="M3.5 18v-6.5h17V18M3.5 11.5V7M20.5 11.5V7M3.5 18v2M20.5 18v2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M6 11.5V9.5h5v2M11 11.5V9.5h5v2" fill="none" stroke="currentColor" stroke-width="1.3"/>
+  </symbol>
+  <symbol id="i-dining" viewBox="0 0 24 24">
+    <path d="M4 10h16M6 10v9M18 10v9M9 10V7.5h6V10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10 7.5V6h4v1.5" fill="none" stroke="currentColor" stroke-width="1.3"/>
+  </symbol>
+  <symbol id="i-sofa" viewBox="0 0 24 24">
+    <path d="M5 11V8.5A1.5 1.5 0 0 1 6.5 7h11A1.5 1.5 0 0 1 19 8.5V11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M3.5 11.5A1.5 1.5 0 0 1 5 10a1.5 1.5 0 0 1 1.5 1.5V14h11v-2.5A1.5 1.5 0 0 1 19 10a1.5 1.5 0 0 1 1.5 1.5V18h-17v-6.5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M5 18v1.5M19 18v1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-crib" viewBox="0 0 24 24">
+    <path d="M4 6v14M20 6v14M4 9h16M4 17h16M8 9v8M12 9v8M16 9v8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    <path d="M4 6c2-2 4 2 8 0s6 2 8 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-door" viewBox="0 0 24 24">
+    <path d="M5 20V4.5h12V20M3 20h18M14.5 12h.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-plant" viewBox="0 0 24 24">
+    <path d="M12 20v-7M12 13c-4 0-6-2.5-6-6 3.5 0 6 2 6 6Zm0-3c4 0 6-2.5 6-6-3.5 0-6 2-6 6Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8 20h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-grid1" viewBox="0 0 20 20">
+    <rect x="3" y="3" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/>
+  </symbol>
+  <symbol id="i-grid2" viewBox="0 0 20 20">
+    <rect x="2.5" y="2.5" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="11.2" y="2.5" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="2.5" y="11.2" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="11.2" y="11.2" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+  </symbol>
+  <symbol id="i-grid3" viewBox="0 0 20 20">
+    <rect x="2.5" y="4" width="4" height="5" rx=".9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="8" y="4" width="4" height="5" rx=".9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="13.5" y="4" width="4" height="5" rx=".9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="2.5" y="11" width="4" height="5" rx=".9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="8" y="11" width="4" height="5" rx=".9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <rect x="13.5" y="11" width="4" height="5" rx=".9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+  </symbol>
+  <symbol id="i-grid9" viewBox="0 0 20 20">
+    <rect x="2.5" y="2.5" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="8.2" y="2.5" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="13.9" y="2.5" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="2.5" y="8.2" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="8.2" y="8.2" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="13.9" y="8.2" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="2.5" y="13.9" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="8.2" y="13.9" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="13.9" y="13.9" width="3.6" height="3.6" rx=".8" fill="none" stroke="currentColor" stroke-width="1.1"/>
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24">
+    <path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-wall" viewBox="0 0 24 24">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <path d="M3.5 12h17M12 4.5v15" fill="none" stroke="currentColor" stroke-width="1.4"/>
+  </symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24">
+    <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24">
+    <path d="M4 7h8M16 7h4M4 17h4M12 17h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="14" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <circle cx="10" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+  </symbol>
+  <symbol id="i-muted" viewBox="0 0 24 24">
+    <path d="M4 9.5h3l4-3.5v12l-4-3.5H4v-5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24">
+    <path d="M4 9.5h3l4-3.5v12l-4-3.5H4v-5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-shot" viewBox="0 0 24 24">
+    <path d="M4 8.5h3l1.5-2h7L17 8.5h3v10H4v-10Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    <circle cx="12" cy="13" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  </symbol>
+  <symbol id="i-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+  <symbol id="i-pip" viewBox="0 0 24 24">
+    <rect x="3.5" y="5" width="17" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <rect x="12" y="11" width="6" height="5.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  </symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5l10 6.5-10 6.5v-13Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24">
+    <path d="M5 7h14M9 7V5h6v2M7 7l1 12h8l1-12M10 10v6M14 10v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="i-auto" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <path d="M12 4.5a7.5 7.5 0 0 1 0 15Z" fill="currentColor" opacity=".28"/>
+  </symbol>
+  <symbol id="i-wifi-off" viewBox="0 0 24 24">
+    <path d="M3 8.5a14 14 0 0 1 5-3M16 5.6a14 14 0 0 1 5 2.9M6.5 12a10 10 0 0 1 3-1.8M14.5 10.2a10 10 0 0 1 3 1.8M9.5 15.2a5.5 5.5 0 0 1 5 0M12 19h.01M4 4l16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24">
+    <rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  </symbol>
+</svg>
+
+<div class="shell">
+  <header class="appbar">
+    <div class="brand">
+      <span class="brand-mark"><svg class="ic"><use href="#i-iris"/></svg></span>
+      <span class="brand-text"><b>IMI-LAN</b><em>智能摄像机 · 局域网直连</em></span>
+    </div>
+    <div class="engine" id="engine">
+      <span class="dot"></span><span id="engineText">正在连接引擎…</span>
+    </div>
+    <span class="spacer"></span>
+
+    <button class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换主题"><svg class="ic"><use href="#i-auto"/></svg></button>
+
+    <div class="layout-wrap">
+      <button class="layout-btn" id="btnLayout" aria-haspopup="true" aria-expanded="false" title="窗口数量">
+        <svg class="ic" id="layoutIcon"><use href="#i-grid1"/></svg>
+        <span id="layoutLabel">1窗口</span>
+        <svg class="ic chev"><use href="#i-chevron"/></svg>
+      </button>
+      <div class="layout-menu" id="layoutMenu" role="menu" aria-label="窗口数量">
+        <button data-layout="1x1" class="on" role="menuitem"><svg class="ic"><use href="#i-grid1"/></svg><span>1窗口</span></button>
+        <button data-layout="2x2" role="menuitem"><svg class="ic"><use href="#i-grid2"/></svg><span>4窗口</span></button>
+        <button data-layout="3x2" role="menuitem"><svg class="ic"><use href="#i-grid3"/></svg><span>6窗口</span></button>
+        <button data-layout="3x3" role="menuitem"><svg class="ic"><use href="#i-grid9"/></svg><span>9窗口</span></button>
+      </div>
+    </div>
+
+    <span class="online-badge" id="onlineBadge"><i></i>在线</span>
+
+    <button class="add-btn" id="btnAdd"><svg class="ic"><use href="#i-plus"/></svg><span>添加摄像头</span></button>
+    <button class="icon-btn" id="btnSettings" title="设置" aria-label="设置"><svg class="ic"><use href="#i-settings"/></svg></button>
+    <button class="account" id="accountBtn" title="账号与设置">
+      <span class="avatar">米</span>
+      <span class="account-text"><b id="accountName">未登录</b><em id="accountRegion">本机</em></span>
+    </button>
+  </header>
+
+  <div class="app">
+    <aside class="side" aria-label="房间">
+      <div class="room-list" id="roomList"></div>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-body">
+        <div class="empty" id="empty">
+          <div class="empty-icon"><svg class="ic"><use href="#i-camera"/></svg></div>
+          <h2>还没有添加摄像头</h2>
+          <p>使用小米账号登录后，会自动读取米家设备列表。<br>视频只在本机与摄像头之间通过局域网传输。</p>
+          <button class="btn primary" id="btnAddEmpty">登录并添加摄像头</button>
+        </div>
+        <div class="grid" id="grid"></div>
+      </div>
+
+      <footer class="stage-foot">
+        <span class="privacy">视频流仅监听 127.0.0.1，不会暴露到局域网</span>
+        <span class="right">
+          <span class="foot-tools" id="gridTools" hidden>
+            <button id="btnMuteAll" title="全部静音/取消静音" aria-label="全部静音"><svg class="ic"><use href="#i-muted"/></svg></button>
+            <button id="btnRefresh" title="刷新" aria-label="刷新"><svg class="ic"><use href="#i-refresh"/></svg></button>
+            <button id="btnWall" title="全屏拼接（Esc 退出）" aria-label="全屏拼接"><svg class="ic"><use href="#i-wall"/></svg></button>
+          </span>
+          <span class="mono" id="footClock">--:--:--</span>
+          <span class="sep"></span>
+          <span id="footOnline">0 / 0 路在线</span>
+          <span class="sep"></span>
+          <span>GO2RTC <b id="engineVersion">—</b></span>
+          <span class="sep"></span>
+          <span id="streamCount">0 路视频</span>
+        </span>
+      </footer>
+    </section>
+  </div>
+</div>
+
+<div id="singleNav" hidden><select id="singleSelect"></select><button id="btnSinglePrev"></button><button id="btnSingleNext"></button></div>
+
+<!-- 单路全屏查看 -->
+<div class="modal viewer" id="modalViewer" aria-hidden="true">
+  <div class="viewer-stage" id="viewerStage"></div>
+
+  <div class="viewer-top">
+    <div class="viewer-title">
+      <span class="live-dot" id="viewerDot"></span>
+      <b id="viewerName">摄像头</b>
+      <span class="model-chip" id="viewerModel"></span>
+      <span class="state-pill live" id="viewerState">LIVE</span>
+      <span class="viewer-sub" id="viewerSub"></span>
+    </div>
+    <div class="viewer-actions">
+      <button class="icon-btn" id="btnViewerMute" title="静音" aria-label="静音"><svg class="ic"><use href="#i-muted"/></svg></button>
+      <button class="icon-btn" id="btnViewerShot" title="截图" aria-label="截图"><svg class="ic"><use href="#i-shot"/></svg></button>
+      <button class="icon-btn" id="btnViewerRec" title="录制" aria-label="录制"><svg class="ic"><use href="#i-record"/></svg></button>
+      <button class="icon-btn" id="btnViewerPip" title="画中画" aria-label="画中画"><svg class="ic"><use href="#i-pip"/></svg></button>
+      <button class="quality-btn" id="btnViewerQuality" title="画质">画质</button>
+      <button class="icon-btn" id="btnViewerClose" title="关闭" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
     </div>
   </div>
 
-  <div class="engine" id="engine">
-    <span class="dot"></span>
-    <span id="engineText">正在连接引擎…</span>
+  <div class="quality-menu" id="qualityMenu">
+    <button data-q="hd">高清</button>
+    <button data-q="sd">流畅</button>
   </div>
 
-  <div class="single-nav" id="singleNav" hidden>
-    <button class="btn ghost" id="btnSinglePrev" title="上一路">‹</button>
-    <select id="singleSelect" title="选择摄像头"></select>
-    <button class="btn ghost" id="btnSingleNext" title="下一路">›</button>
+  <div class="viewer-bottom">
+    <span class="viewer-hint">← → 切换 · 数字键直达 · Esc 退出</span>
+    <div class="viewer-chips" id="viewerChips"></div>
+    <span class="viewer-clock mono" id="viewerClock">--:--:--</span>
   </div>
-
-  <div class="top-actions">
-    <button class="btn ghost" id="btnRefresh" title="刷新">↻</button>
-    <button class="btn ghost" id="btnWall" title="全屏拼接（Esc 退出）">⛶</button>
-    <button class="btn ghost" id="btnMuteAll" title="全部静音/取消静音">🔇</button>
-    <button class="btn primary" id="btnAdd">＋ 添加摄像头</button>
-    <button class="btn ghost" id="btnSettings" title="设置">⚙</button>
-  </div>
-</header>
-
-<main>
-  <div class="empty" id="empty">
-    <div class="empty-icon">📷</div>
-    <h2>还没有添加摄像头</h2>
-    <p>使用小米账号登录后，会自动读取米家设备列表。<br>视频只在本机与摄像头之间通过局域网传输。</p>
-    <button class="btn primary big" id="btnAddEmpty">登录并添加摄像头</button>
-  </div>
-
-  <div class="grid" id="grid"></div>
-</main>
-
-<footer class="footer">
-  <span>go2rtc <b id="engineVersion">—</b></span>
-  <span id="streamCount">0 路视频</span>
-  <span class="hint">视频流仅监听 127.0.0.1，不会暴露到局域网</span>
-</footer>
+</div>
 
 <!-- 登录 / 添加摄像头 -->
 <div class="modal" id="modalLogin" aria-hidden="true">
-  <div class="modal-card">
-    <button class="modal-close" data-close="modalLogin">✕</button>
+  <div class="modal-card login-card">
+    <button class="modal-close" data-close="modalLogin" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
 
     <div class="steps">
       <div class="step" data-step="login">
+        <p class="eyebrow">添加摄像头</p>
         <h2>登录小米账号</h2>
         <p class="muted">推荐用米家 App 扫码，不需要输入账号密码；二维码只在本机生成，登录令牌保存在本机。</p>
 
@@ -132,6 +328,7 @@
       <div class="step" data-step="devices">
         <div class="step-head">
           <div>
+            <p class="eyebrow">添加摄像头</p>
             <h2>选择摄像头</h2>
             <p class="muted" id="devicesTip">已读取到以下设备。勾选后添加到主界面。</p>
           </div>
@@ -145,81 +342,83 @@
   </div>
 </div>
 
-<!-- 单路全屏查看 -->
-<div class="modal viewer" id="modalViewer" aria-hidden="true">
-  <div class="viewer-stage" id="viewerStage"></div>
-
-  <div class="viewer-top">
-    <div class="viewer-title">
-      <span class="live-dot"></span>
-      <span id="viewerName">摄像头</span>
-      <span class="viewer-sub" id="viewerSub"></span>
-    </div>
-    <div class="viewer-actions">
-      <button class="btn ghost" id="btnViewerMute" title="静音">🔇</button>
-      <button class="btn ghost" id="btnViewerShot" title="截图">📷</button>
-      <button class="btn ghost" id="btnViewerRec" title="录制">⏺</button>
-      <button class="btn ghost" id="btnViewerPip" title="画中画">⧉</button>
-      <button class="btn ghost" id="btnViewerQuality" title="画质">画质</button>
-      <button class="btn ghost" id="btnViewerClose" title="关闭">✕</button>
-    </div>
-  </div>
-
-  <div class="quality-menu" id="qualityMenu">
-    <button data-q="hd">高清</button>
-    <button data-q="sd">流畅</button>
-  </div>
-
-  <button class="viewer-nav prev" id="btnViewerPrev" title="上一路（←）">‹</button>
-  <button class="viewer-nav next" id="btnViewerNext" title="下一路（→）">›</button>
-</div>
-
 <!-- 设置 -->
-<div class="modal" id="modalSettings" aria-hidden="true">
-  <div class="modal-card narrow">
-    <button class="modal-close" data-close="modalSettings">✕</button>
-    <h2>设置</h2>
-    <div class="settings-list">
-      <div class="settings-row"><span>引擎版本</span><b id="setVersion">—</b></div>
-      <div class="settings-row"><span>已登录账号</span><b id="setUser">—</b></div>
-      <div class="settings-row"><span>账号区域</span><b id="setRegion">—</b></div>
-      <div class="settings-row"><span>视频链路</span><b>本机 ↔ 摄像头（局域网）</b></div>
-      <div class="settings-row"><span>首页布局</span>
-        <select id="setLayout">
+<div class="modal drawer" id="modalSettings" aria-hidden="true">
+  <aside class="drawer-panel" aria-label="设置">
+    <header class="drawer-head">
+      <div>
+        <h2>设置</h2>
+        <p>只影响本机显示与播放</p>
+      </div>
+      <button class="modal-close" data-close="modalSettings" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+
+    <div class="drawer-body">
+      <section class="set-sec">
+        <label class="set-label">外观</label>
+        <div class="seg" id="themeSeg" role="group" aria-label="主题模式">
+          <button data-theme="auto">自动</button>
+          <button data-theme="light">亮色</button>
+          <button data-theme="dark">暗色</button>
+        </div>
+      </section>
+
+      <section class="set-sec">
+        <label class="set-label">窗口</label>
+        <div class="layout-tiles" id="layoutTiles" role="group" aria-label="窗口数量">
+          <button data-layout-grid="1x1"><svg class="ic"><use href="#i-grid1"/></svg><span>1窗口</span></button>
+          <button data-layout-grid="2x2"><svg class="ic"><use href="#i-grid2"/></svg><span>4窗口</span></button>
+          <button data-layout-grid="3x2"><svg class="ic"><use href="#i-grid3"/></svg><span>6窗口</span></button>
+          <button data-layout-grid="3x3"><svg class="ic"><use href="#i-grid9"/></svg><span>9窗口</span></button>
+        </div>
+        <select id="setLayout" hidden>
           <option value="1x1">1 × 1（1 路）</option>
           <option value="2x2">2 × 2（4 路）</option>
           <option value="3x2">3 × 2（6 路）</option>
           <option value="3x3">3 × 3（9 路）</option>
           <option value="all">全部（自动换行）</option>
         </select>
-      </div>
-      <div class="settings-row"><span>画面比例</span>
-        <select id="setDisplay">
+      </section>
+
+      <section class="set-sec">
+        <label class="set-label">画面比例</label>
+        <div class="seg" id="displaySeg" role="group" aria-label="画面比例">
+          <button data-display="ratio">16:9</button>
+          <button data-display="fill">铺满</button>
+        </div>
+        <select id="setDisplay" hidden>
           <option value="ratio">保持 16:9（不裁切）</option>
           <option value="fill">铺满窗口（可能裁切）</option>
         </select>
+      </section>
+
+      <div class="settings-list">
+        <div class="settings-row"><span>引擎版本</span><b id="setVersion">—</b></div>
+        <div class="settings-row"><span>当前账号</span><b id="setUser">—</b></div>
+        <div class="settings-row"><span>账号区域</span><b id="setRegion">—</b></div>
+        <div class="settings-row"><span>过滤门铃/电池设备</span>
+          <label class="switch"><input type="checkbox" id="setHideBattery"> 隐藏</label>
+        </div>
+        <div class="settings-row"><span>后台保持连接</span>
+          <label class="switch"><input type="checkbox" id="setKeepAlive"> 保持</label>
+        </div>
+        <div class="settings-row"><span>后台 2 分钟后休眠</span>
+          <label class="switch"><input type="checkbox" id="setBgSleep"> 开启</label>
+        </div>
       </div>
-      <div class="settings-row"><span>过滤门铃/电池设备</span>
-        <label class="switch"><input type="checkbox" id="setHideBattery"> 隐藏</label>
+
+      <div class="settings-actions">
+        <button class="btn ghost" id="btnReimport">重新读取设备</button>
+        <button class="btn danger" id="btnClear">清空所有摄像头</button>
       </div>
-      <div class="settings-row"><span>后台保持连接</span>
-        <label class="switch"><input type="checkbox" id="setKeepAlive"> 保持</label>
-      </div>
-      <div class="settings-row"><span>后台 2 分钟后休眠（释放内存）</span>
-        <label class="switch"><input type="checkbox" id="setBgSleep"> 开启</label>
-      </div>
+      <p class="muted small">每次建立新连接时，需要联网向小米云端获取一次摄像头密钥；音视频本身走局域网，不经过公网。</p>
     </div>
-    <div class="settings-actions">
-      <button class="btn ghost" id="btnReimport">重新读取设备</button>
-      <button class="btn danger" id="btnClear">清空所有摄像头</button>
-    </div>
-    <p class="muted small">每次建立新连接时，需要联网向小米云端获取一次摄像头密钥；音视频本身走局域网，不经过公网。</p>
-  </div>
+  </aside>
 </div>
 
 <div class="toast" id="toast"></div>
 
-<script type="module" src="video-stream.js?v=20261110g"></script>
-<script type="module" src="app.js?v=20261110g"></script>
+<script type="module" src="video-stream.js?v=20261110h"></script>
+<script type="module" src="app.js?v=20261110x"></script>
 </body>
 </html>

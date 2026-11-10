@@ -220,8 +220,266 @@ function saveToken(user, token) {
   }
 
   fs.writeFileSync(CONFIG, lines.join(eol), 'utf8');
+  roomsCache = { key: '', at: 0, data: null };
+  authCache = { key: '', at: 0, auth: null };
+  roomsFail = { key: '', at: 0, message: '' };
   log(`token saved for ${mask(user)}`);
 }
+
+/* ------------------------------------------------------------------ */
+/* 米家房间：只读云端查询，结果只回给本机网页                        */
+/* ------------------------------------------------------------------ */
+
+const CLOUD_HOSTS = {
+  cn: 'https://api.io.mi.com/app',
+  de: 'https://de.api.io.mi.com/app',
+  i2: 'https://i2.api.io.mi.com/app',
+  ru: 'https://ru.api.io.mi.com/app',
+  sg: 'https://sg.api.io.mi.com/app',
+  us: 'https://us.api.io.mi.com/app',
+};
+
+let roomsCache = { key: '', at: 0, data: null };
+let authCache = { key: '', at: 0, auth: null };
+let roomsFail = { key: '', at: 0, message: '' };
+const ROOMS_TTL = 10 * 60 * 1000;
+const AUTH_TTL = 10 * 60 * 1000;
+const ROOMS_FAIL_BACKOFF = 3 * 60 * 1000;
+
+function readXiaomiTokens() {
+  try {
+    const lines = fs.readFileSync(CONFIG, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/);
+    let start = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (/^xiaomi:\s*(?:#.*)?$/.test(lines[i])) { start = i; break; }
+    }
+    if (start < 0) return {};
+    const out = {};
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^\S/.test(lines[i])) break;
+      const m = lines[i].match(/^\s+("[^"]+"|[^:\s]+)\s*:\s*(.*?)\s*$/);
+      if (!m) continue;
+      const key = m[1].replace(/^"|"$/g, '');
+      let value = m[2].trim();
+      if (value.length >= 2 && value[0] === '"' && value.endsWith('"')) value = value.slice(1, -1);
+      if (value) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function rc4(key, input) {
+  const s = Array.from({ length: 256 }, (_, i) => i);
+  let j = 0;
+  for (let i = 0; i < 256; i++) {
+    j = (j + s[i] + key[i % key.length]) & 255;
+    [s[i], s[j]] = [s[j], s[i]];
+  }
+  let i = 0;
+  j = 0;
+  const next = () => {
+    i = (i + 1) & 255;
+    j = (j + s[i]) & 255;
+    [s[i], s[j]] = [s[j], s[i]];
+    return s[(s[i] + s[j]) & 255];
+  };
+  // go2rtc 的 RC4 实现会先丢弃 1024 字节
+  for (let k = 0; k < 1024; k++) next();
+  const out = Buffer.alloc(input.length);
+  for (let k = 0; k < input.length; k++) out[k] = input[k] ^ next();
+  return out;
+}
+
+function signedNonceOf(ssecurity, nonce) {
+  return crypto.createHash('sha256').update(ssecurity).update(nonce).digest();
+}
+
+function signatureOf(method, apiPath, form, signedNonce) {
+  let text = `${method}&${apiPath}&data=${form.get('data') || ''}`;
+  if (form.has('rc4_hash__')) text += `&rc4_hash__=${form.get('rc4_hash__')}`;
+  text += `&${signedNonce.toString('base64')}`;
+  return crypto.createHash('sha1').update(text).digest('base64');
+}
+
+async function cloudLogin(user, token) {
+  const session = { cookies: new Map() };
+  session.cookies.set('userId', user);
+  session.cookies.set('passToken', token);
+
+  const res = await requestFollow(session, 'https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=xiaomiio');
+  const data = parseJsonp(await res.text());
+  if (data.code === 70016) throw new Error('小米账号需要验证，请稍后重试或重新扫码');
+  if (!data.location) throw new Error('登录令牌已失效，请重新扫码');
+  if (!data.ssecurity) throw new Error('小米云端未返回 ssecurity');
+  const ssecurity = Buffer.from(String(data.ssecurity), 'base64');
+
+  await requestFollow(session, data.location);
+  for (const name of ['userId', 'cUserId', 'serviceToken']) {
+    if (!session.cookies.get(name)) throw new Error('小米云端登录不完整');
+  }
+  return { session, ssecurity };
+}
+
+async function cloudRequest(auth, region, apiPath, body) {
+  const base = CLOUD_HOSTS[region] || CLOUD_HOSTS.cn;
+  const nonce = crypto.randomBytes(12);
+  nonce.writeUInt32BE(Math.floor(Date.now() / 60000), 8);
+  const signedNonce = signedNonceOf(auth.ssecurity, nonce);
+
+  const form = new URLSearchParams();
+  form.set('data', JSON.stringify(body || {}));
+  form.set('rc4_hash__', signatureOf('POST', apiPath, form, signedNonce));
+  for (const key of ['data', 'rc4_hash__']) {
+    const value = form.get(key);
+    form.set(key, rc4(signedNonce, Buffer.from(value, 'utf8')).toString('base64'));
+  }
+  form.set('signature', signatureOf('POST', apiPath, form, signedNonce));
+  form.set('_nonce', nonce.toString('base64'));
+
+  const cookie = ['userId', 'cUserId', 'serviceToken']
+    .map(k => `${k}=${auth.session.cookies.get(k) || ''}`).join('; ');
+  const res = await fetch(base + apiPath, {
+    method: 'POST',
+    headers: {
+      ...UA,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: cookie,
+    },
+    body: form.toString(),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`小米云端 HTTP ${res.status}`);
+  const raw = Buffer.from((await res.text()).trim(), 'base64');
+  const plain = rc4(signedNonce, raw).toString('utf8');
+  const data = JSON.parse(plain);
+  if (data.code !== 0) throw new Error(data.message || `小米云端错误 ${data.code}`);
+  return data.result;
+}
+
+// 同一账号的云端登录、同一账号+区域的房间查询各只跑一次。
+// 小米对同一个 passToken 的短时重复登录会触发风控，所以这里必须串行。
+const inflight = new Map();
+
+function once(key, task) {
+  const running = inflight.get(key);
+  if (running) return running;
+  const p = Promise.resolve()
+    .then(task)
+    .finally(() => {
+      if (inflight.get(key) === p) inflight.delete(key);
+    });
+  inflight.set(key, p);
+  return p;
+}
+
+function getAuth(user, token, force = false) {
+  const key = `${user}|${token.slice(-12)}`;
+  if (force && authCache.key === key) authCache = { key: '', at: 0, auth: null };
+  return once(`login:${key}`, async () => {
+    // 排队等锁期间，前一个调用可能已经登录完了
+    if (authCache.auth && authCache.key === key && Date.now() - authCache.at < AUTH_TTL) {
+      return authCache.auth;
+    }
+    const auth = await cloudLogin(user, token);
+    authCache = { key, at: Date.now(), auth };
+    return auth;
+  });
+}
+
+function fetchRooms(user, region) {
+  return once(`rooms:${user}|${region}`, () => loadRooms(user, region));
+}
+
+async function loadRooms(user, region) {
+  const key = `${user}|${region}`;
+  if (roomsCache.data && roomsCache.key === key && Date.now() - roomsCache.at < ROOMS_TTL) {
+    return roomsCache.data;
+  }
+  if (roomsFail.key === key && Date.now() - roomsFail.at < ROOMS_FAIL_BACKOFF) {
+    throw new Error(roomsFail.message);
+  }
+
+  try {
+    const tokens = readXiaomiTokens();
+    const token = tokens[user];
+    if (!token) throw new Error('没有可用的登录令牌');
+
+    let auth = await getAuth(user, token);
+    const homeBody = { limit: 150, fetch_share: true, fetch_share_dev: true, plat_form: 0, app_ver: 9 };
+    let home;
+    try {
+      home = await cloudRequest(auth, region, '/v2/homeroom/gethome', homeBody);
+    } catch (e) {
+      if (!/HTTP 401/.test(e.message)) throw e;
+      auth = await getAuth(user, token, true);
+      home = await cloudRequest(auth, region, '/v2/homeroom/gethome', homeBody);
+    }
+
+    const homes = [...(home.homelist || []), ...(home.share_home_list || [])];
+    const roomOf = new Map();
+    const dids = [];
+    for (const h of homes) {
+      for (const room of h.roomlist || []) {
+        for (const did of room.dids || []) {
+          if (!roomOf.has(did)) roomOf.set(did, String(room.name || '未分配房间'));
+          if (!dids.includes(did)) dids.push(did);
+        }
+      }
+    }
+
+    const devicesResult = await cloudRequest(auth, region, '/v2/home/device_list_page', {
+      limit: 200,
+      get_split_device: true,
+      get_third_device: true,
+      dids,
+    });
+
+    const devices = (devicesResult.list || [])
+      .filter(d => /\.(camera|cateye|feeder)\./i.test(String(d.model || '')))
+      .map(d => ({
+        did: String(d.did || ''),
+        name: String(d.name || ''),
+        model: String(d.model || ''),
+        room: roomOf.get(String(d.did || '')) || '未分配房间',
+        online: !!(d.isOnline ?? d.online),
+      }))
+      .filter(d => d.did);
+
+    const roomMap = new Map();
+    for (const device of devices) {
+      if (!roomMap.has(device.room)) roomMap.set(device.room, { name: device.room, online: 0, total: 0 });
+      const room = roomMap.get(device.room);
+      room.total += 1;
+      if (device.online) room.online += 1;
+    }
+
+    const rooms = [...roomMap.values()].sort((a, b) => {
+      if (a.name === '未分配房间') return 1;
+      if (b.name === '未分配房间') return -1;
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+
+    const data = {
+      ok: true,
+      rooms,
+      devices: devices.map(({ did, room, online }) => ({ did, room, online })),
+      total: {
+        online: devices.filter(d => d.online).length,
+        total: devices.length,
+      },
+      updatedAt: Date.now(),
+    };
+    roomsCache = { key, at: Date.now(), data };
+    roomsFail = { key: '', at: 0, message: '' };
+    return data;
+  } catch (e) {
+    roomsFail = { key, at: Date.now(), message: e.message };
+    throw e;
+  }
+}
+
 
 class QRSession {
   constructor() {
@@ -465,6 +723,24 @@ const server = http.createServer(async (req, res) => {
         log('qr session canceled');
       }
       sendJSON(req, res, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === '/rooms') {
+      const tokens = readXiaomiTokens();
+      const user = url.searchParams.get('id') || Object.keys(tokens)[0] || '';
+      const region = url.searchParams.get('region') || 'cn';
+      if (!user || !tokens[user]) {
+        sendJSON(req, res, 404, { ok: false, error: '没有可用的登录令牌' });
+        return;
+      }
+      try {
+        const data = await fetchRooms(user, region);
+        sendJSON(req, res, 200, data);
+      } catch (e) {
+        log(`rooms failed for ${mask(user)}: ${e.message}`);
+        sendJSON(req, res, 502, { ok: false, error: e.message });
+      }
       return;
     }
 
