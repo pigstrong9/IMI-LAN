@@ -62,6 +62,7 @@ let win = null;
 let tray = null;
 let engine = null;
 let engineOwned = false;
+let engineChecking = false;
 let helper = null;
 let helperOwned = false;
 let helperStarting = false;
@@ -140,7 +141,7 @@ function spawnEngine() {
     if (quitting || !engineOwned) return;
     // 自己启动的引擎异常退出时自动拉起；如果二维码助手已经重启了引擎，则接管并刷新页面
     setTimeout(async () => {
-      if (quitting || engine) return;
+      if (quitting || engine || engineChecking) return;
       if (await portOpen(API_PORT)) {
         engineOwned = false;
         if (win) win.webContents.reload();
@@ -171,23 +172,45 @@ async function startEngine() {
 }
 
 async function restartEngine() {
-  if (engineOwned && engine) {
-    try { engine.kill(); } catch {}
-    engine = null;
-  } else {
-    const pid = portPid(API_PORT);
-    if (pid) {
-      try { execFileSync('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true }); } catch {}
+  engineChecking = true;
+  try {
+    if (engineOwned && engine) {
+      try { engine.kill(); } catch {}
+      engine = null;
+    } else {
+      const pid = portPid(API_PORT);
+      if (pid) {
+        try { execFileSync('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true }); } catch {}
+      }
     }
+    for (let i = 0; i < 40; i++) {
+      if (!(await portOpen(API_PORT))) break;
+      await sleep(250);
+    }
+    spawnEngine();
+    const ok = await waitEngine(20000);
+    if (win) win.webContents.reload();
+    return ok;
+  } finally {
+    engineChecking = false;
   }
-  for (let i = 0; i < 40; i++) {
-    if (!(await portOpen(API_PORT))) break;
-    await sleep(250);
+}
+
+// 引擎兜底看门狗：扫码登录后引擎由二维码助手重启（归助手所有），
+// 桌面版的 exit 监听管不到它。引擎无论被谁拉起，一旦退出且端口空了，
+// 这里兜底接管重启，避免出现"引擎未启动"却没人救的局面。
+async function watchEngine() {
+  if (quitting || engine || engineChecking) return;
+  engineChecking = true;
+  try {
+    if (await portOpen(API_PORT)) return;
+    logHelper('engine watchdog: port closed, respawning engine');
+    spawnEngine();
+    const ok = await waitEngine(20000);
+    if (ok && win) win.webContents.reload();
+  } finally {
+    engineChecking = false;
   }
-  spawnEngine();
-  const ok = await waitEngine(20000);
-  if (win) win.webContents.reload();
-  return ok;
 }
 
 function stopEngine() {
@@ -404,6 +427,8 @@ app.whenReady().then(async () => {
     return;
   }
   await startHelper();
+  // 每 10 秒兜底检查一次引擎是否还活着（见 watchEngine 注释）
+  setInterval(() => { watchEngine().catch(() => {}); }, 10000);
   createWindow();
   createTray();
   if (app.isPackaged && !PROBE) {

@@ -67,6 +67,18 @@ const UA = {
   'Accept-Language': 'zh-CN,zh;q=0.9',
 };
 
+// 对 io.mi.com 云端 API 的请求伪装成米家 App 的 UA（借鉴 MijiaLAN）；
+// account.xiaomi.com 的登录/扫码是网页流程，仍用上面的浏览器 UA。
+const APP_UA = {
+  'User-Agent': `${rnd(18, 'abcdefghijklmnopqrstuvwxyz')}-${rnd(13, 'ABCDE')} APP/com.xiaomi.mihome APPV/10.5.201`,
+};
+
+function rnd(n, chars) {
+  let s = '';
+  for (let i = 0; i < n; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let SESSION = null;
@@ -410,7 +422,7 @@ async function cloudRequest(auth, region, apiPath, body) {
   const res = await fetch(base + apiPath, {
     method: 'POST',
     headers: {
-      ...UA,
+      ...APP_UA,
       'Content-Type': 'application/x-www-form-urlencoded',
       Cookie: cookie,
     },
@@ -883,44 +895,10 @@ server.on('error', err => {
   process.exit(0);
 });
 
-// 小米 passToken 会在一段时间后被判过期。助手常驻时定期用它做一次登录并
-// 保存轮换后的 token，尽量让引擎下次重启不需要重新扫码。
-const KEEPALIVE_MS = 30 * 60 * 1000;
-const KEEPALIVE_FIRST_MS = 3 * 60 * 1000;
-let keepaliveTimer = null;
-
-function scheduleKeepalive(delay = KEEPALIVE_MS) {
-  // 只保留一条定时链：重复调用时先清掉旧定时器，避免同一时刻挂多个保活任务
-  if (keepaliveTimer) clearTimeout(keepaliveTimer);
-  keepaliveTimer = setTimeout(keepalive, delay);
-}
-
-async function keepalive() {
-  keepaliveTimer = null;
-  try {
-    // 正在扫码登录时不要插手，避免和登录流程抢 token
-    if (SESSION && ['starting', 'waiting', 'scanned', 'restarting'].includes(SESSION.state)) return;
-    const tokens = readXiaomiTokens();
-    for (const user of Object.keys(tokens)) {
-      if (!user || !tokens[user]) continue;
-      try {
-        const login = await getAuth(user, tokens[user], true);
-        const written = persistRefreshedToken(user, tokens[user], login.auth, login.token);
-        log(written
-          ? `token keepalive refreshed for ${mask(user)}`
-          : `token keepalive ok for ${mask(user)}`);
-      } catch (e) {
-        log(`token keepalive failed for ${mask(user)}: ${e.message}`);
-      }
-    }
-  } catch (e) {
-    log(`token keepalive failed: ${e.message}`);
-  } finally {
-    scheduleKeepalive();
-  }
-}
+// 不做 token 保活：小米对同一 passToken 的短时重复登录会触发风控（code 70016，
+// 见 cloudLogin 注释），而 serviceLogin 流程拿不到轮换后的新 token，保活登录
+// 只会消耗风控额度却保不住 token。token 失效时提示用户重新扫码即可。
 
 server.listen(HELPER_PORT, HELPER_HOST, () => {
   log(`helper listening on ${HELPER_HOST}:${HELPER_PORT}`);
-  scheduleKeepalive(KEEPALIVE_FIRST_MS);
 });

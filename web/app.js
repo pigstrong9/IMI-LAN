@@ -28,6 +28,9 @@ const QR_ORIGIN = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.h
   ? `${location.protocol}//127.0.0.1:19841`
   : '';
 
+// 桌面版加载页面时带 ?app=1，用来区分提示语（托盘重启 vs 运行 bat）
+const IS_APP = new URLSearchParams(location.search).has('app');
+
 // 后台保持连接最多维持 2 分钟，之后释放视频解码与引擎缓冲，回到前台自动重连
 const BACKGROUND_IDLE_MS = 2 * 60 * 1000;
 const HIDDEN_GRACE_MS = 4 * 1000;
@@ -585,7 +588,9 @@ async function checkEngine() {
       for (const card of state.cards.values()) card.reload();
     }
   } catch {
-    setEngine(false, '引擎未启动 · 请运行“启动监控.bat”');
+    setEngine(false, IS_APP
+      ? '引擎未启动 · 稍等约 10 秒会自动重启，也可右键托盘图标选「重启引擎」'
+      : '引擎未启动 · 请运行“启动监控.bat”');
   }
 }
 
@@ -1953,7 +1958,9 @@ async function onQrDone(st) {
   const up = await waitEngine(30000);
   if (!up) {
     status.className = 'qr-status err';
-    status.textContent = '登录成功，但引擎未恢复：请运行「启动监控.bat」后重试。';
+    status.textContent = IS_APP
+      ? '登录成功，但引擎未恢复：请右键托盘图标选「重启引擎」。'
+      : '登录成功，但引擎未恢复：请运行「启动监控.bat」后重试。';
     toast('引擎未恢复', true);
     return;
   }
