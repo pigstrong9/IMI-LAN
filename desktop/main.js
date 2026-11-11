@@ -42,8 +42,15 @@ function migrateLegacyApiPort() {
 migrateLegacyApiPort();
 const API_PORT = readApiPort() || 19840;
 const API_URL = `http://127.0.0.1:${API_PORT}`;
-const QR_PORT = 1985;
+const QR_PORT = 19841;
 const PROBE = process.argv.includes('--probe');
+
+function logHelper(message) {
+  try {
+    const stamp = new Date().toLocaleString('zh-CN', { hour12: false });
+    fs.appendFileSync(path.join(LOG_DIR, 'helper.log'), `[${stamp}] ${message}\n`, 'utf8');
+  } catch {}
+}
 
 // 摄像头是 H.265，尽量走平台硬件解码
 app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
@@ -57,7 +64,13 @@ let engine = null;
 let engineOwned = false;
 let helper = null;
 let helperOwned = false;
+let helperStarting = false;
+let helperRetry = 0;
+let helperSince = 0;
 let quitting = false;
+
+// 助手异常退出后的重试间隔（退避封顶），避免每几秒 spawn 一次
+const HELPER_RETRY_MS = [3000, 10000, 30000];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -185,17 +198,42 @@ function stopEngine() {
 }
 
 async function startHelper() {
-  if (await portOpen(QR_PORT)) return;
-  if (!fs.existsSync(QR_SCRIPT)) return;
-  // 用 Electron 自带 Node 运行，打包后也不需要用户安装 Python
-  helper = spawn(process.execPath, [QR_SCRIPT], {
-    cwd: ROOT,
-    windowsHide: true,
-    stdio: 'ignore',
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-  });
-  helperOwned = true;
-  helper.on('exit', () => { helper = null; });
+  // 守卫必须在 await 之前置位：portOpen 最长要等 800ms，
+  // 期间其他调用如果只看 helperStarting 会重复 spawn。
+  if (quitting || helperStarting || helper) return;
+  helperStarting = true;
+  try {
+    if (await portOpen(QR_PORT)) {
+      helperRetry = 0;
+      return;
+    }
+    if (!fs.existsSync(QR_SCRIPT)) return;
+    // 用 Electron 自带 Node 运行，打包后也不需要用户安装 Python
+    const child = spawn(process.execPath, [QR_SCRIPT], {
+      cwd: ROOT,
+      windowsHide: true,
+      stdio: 'ignore',
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    });
+    helper = child;
+    helperOwned = true;
+    helperSince = Date.now();
+    child.on('exit', () => {
+      if (helper === child) helper = null;
+      if (quitting) return;
+      // 端口被旧助手占用、脚本报错等情况会让助手启动后立刻退出。
+      // 稳定运行超过 30 秒后重置退避；否则按 3s→10s→30s 重试并留日志。
+      if (Date.now() - helperSince > 30000) helperRetry = 0;
+      const delay = HELPER_RETRY_MS[Math.min(helperRetry, HELPER_RETRY_MS.length - 1)];
+      helperRetry += 1;
+      logHelper(`helper exited, retry in ${delay}ms`);
+      setTimeout(() => { startHelper().catch(() => {}); }, delay);
+    });
+  } catch (e) {
+    logHelper(`helper spawn failed: ${e.message}`);
+  } finally {
+    helperStarting = false;
+  }
 }
 
 function stopHelper() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* 米家二维码登录助手（默认 127.0.0.1:1985）
+/* 米家二维码登录助手（默认 127.0.0.1:19841）
  *
  * 1. 向小米账号页申请二维码并长轮询扫码结果
  * 2. 拿到 passToken 后写回 go2rtc.yaml 的 xiaomi: 段
@@ -57,7 +57,7 @@ function migrateLegacyApiPort() {
 migrateLegacyApiPort();
 const API_PORT = Number(process.env.IMI_API_PORT || readApiPortFromConfig() || 19840);
 const HELPER_HOST = process.env.IMI_HELPER_HOST || '127.0.0.1';
-const HELPER_PORT = Number(process.env.IMI_HELPER_PORT || 1985);
+const HELPER_PORT = Number(process.env.IMI_HELPER_PORT || 19841);
 // NAS 版由同一容器里的网关启动引擎，重启走 go2rtc 自带的 /api/restart
 const RESTART_MODE = process.env.IMI_RESTART_MODE || (process.platform === 'win32' ? 'spawn' : 'api');
 
@@ -462,22 +462,22 @@ function fetchRooms(user, region) {
 // 小米会在登录时轮换 passToken。go2rtc 只在内存里用新 token，
 // 这里把轮换后的值写回配置，避免引擎重启后又拿旧 token 要求重新扫码。
 // authToken 是创建该会话时使用的 token；和配置不一致时说明配置已被引擎更新，
-// 绝不能把旧会话里的 token 写回去。
+// 绝不能把旧会话里的 token 写回去。返回是否真的写入了新 token。
 function persistRefreshedToken(user, configToken, auth, authToken) {
-  if (authToken !== configToken) return;
+  if (authToken !== configToken) return false;
   const next = auth?.session?.cookies?.get('passToken') || '';
-  if (!next || next === configToken) return;
+  if (!next || next === configToken) return false;
   try {
     // 写前再读一次，避免覆盖另一个进程刚写好的新 token
     const current = readXiaomiTokens()[user] || '';
-    if (current !== configToken) return;
+    if (current !== configToken) return false;
 
     const original = fs.readFileSync(CONFIG);
     let text = original.toString('utf8').replace(/^\uFEFF/, '');
     const eol = text.includes('\r\n') ? '\r\n' : '\n';
     const lines = text.split(/\r?\n/);
     const start = lines.findIndex(l => /^xiaomi:\s*(?:#.*)?$/.test(l));
-    if (start < 0) return;
+    if (start < 0) return false;
     let end = lines.length;
     for (let j = start + 1; j < lines.length; j++) {
       if (/^\S/.test(lines[j])) { end = j; break; }
@@ -503,8 +503,10 @@ function persistRefreshedToken(user, configToken, auth, authToken) {
       try { fs.chmodSync(CONFIG, 0o600); } catch {}
     }
     log(`token refreshed for ${mask(user)}`);
+    return true;
   } catch (e) {
     log(`token refresh failed: ${e.message}`);
+    return false;
   }
 }
 
@@ -881,6 +883,44 @@ server.on('error', err => {
   process.exit(0);
 });
 
+// 小米 passToken 会在一段时间后被判过期。助手常驻时定期用它做一次登录并
+// 保存轮换后的 token，尽量让引擎下次重启不需要重新扫码。
+const KEEPALIVE_MS = 30 * 60 * 1000;
+const KEEPALIVE_FIRST_MS = 3 * 60 * 1000;
+let keepaliveTimer = null;
+
+function scheduleKeepalive(delay = KEEPALIVE_MS) {
+  // 只保留一条定时链：重复调用时先清掉旧定时器，避免同一时刻挂多个保活任务
+  if (keepaliveTimer) clearTimeout(keepaliveTimer);
+  keepaliveTimer = setTimeout(keepalive, delay);
+}
+
+async function keepalive() {
+  keepaliveTimer = null;
+  try {
+    // 正在扫码登录时不要插手，避免和登录流程抢 token
+    if (SESSION && ['starting', 'waiting', 'scanned', 'restarting'].includes(SESSION.state)) return;
+    const tokens = readXiaomiTokens();
+    for (const user of Object.keys(tokens)) {
+      if (!user || !tokens[user]) continue;
+      try {
+        const login = await getAuth(user, tokens[user], true);
+        const written = persistRefreshedToken(user, tokens[user], login.auth, login.token);
+        log(written
+          ? `token keepalive refreshed for ${mask(user)}`
+          : `token keepalive ok for ${mask(user)}`);
+      } catch (e) {
+        log(`token keepalive failed for ${mask(user)}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    log(`token keepalive failed: ${e.message}`);
+  } finally {
+    scheduleKeepalive();
+  }
+}
+
 server.listen(HELPER_PORT, HELPER_HOST, () => {
   log(`helper listening on ${HELPER_HOST}:${HELPER_PORT}`);
+  scheduleKeepalive(KEEPALIVE_FIRST_MS);
 });

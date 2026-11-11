@@ -23,9 +23,9 @@ const state = {
   roomData: cachedRooms(), // 本地助手 /rooms 返回的米家房间与设备映射（启动时先用上次缓存）
 };
 
-// NAS 版由内置网关把二维码助手代理到同源；桌面版仍直连本机 1985
+// NAS 版由内置网关把二维码助手代理到同源；桌面版仍直连本机 19841
 const QR_ORIGIN = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname)
-  ? `${location.protocol}//127.0.0.1:1985`
+  ? `${location.protocol}//127.0.0.1:19841`
   : '';
 
 // 后台保持连接最多维持 2 分钟，之后释放视频解码与引擎缓冲，回到前台自动重连
