@@ -30,3 +30,6 @@ design/
 .trash-local/
 __pycache__/
 *.pyc
+
+# WorkBuddy 本地工作记录（不入库）
+.workbuddy/

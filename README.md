@@ -30,7 +30,22 @@
 
 其他型号只要 go2rtc 支持，也会自动出现在设备列表里。2020 年以后的小米摄像头大多使用统一的 `miss` 协议，支持概率较高。
 
-## 从仓库克隆后准备
+## 安装（推荐）
+
+Windows 用户直接下载 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 里的 `IMI-LAN-Setup-1.0.0-win-x64.exe`，双击安装即可：**不需要克隆仓库、不需要自己编译 go2rtc，也不需要安装 Node.js**。
+
+- 默认装到 `%LOCALAPPDATA%\Programs\IMI-LAN`（当前用户目录，无需管理员权限），安装后桌面出现「米家监控」快捷方式。
+- 首次启动：点「添加摄像头」→「二维码登录」→ 用米家 App 扫码 → 勾选要显示的摄像头。
+- 若防火墙拦截，右键安装目录里的 `修复网络权限（桌面版）.bat` → 以管理员身份运行，然后从托盘菜单「重启引擎」。
+- 安装包不含任何账号信息，安装时生成空白 `go2rtc.yaml`；令牌只在扫码后写入本机。按许可证要求未附带 GPL 构建的 `bin/ffmpeg.exe`，H.265 依赖浏览器 / 系统原生解码。
+- fnOS（飞牛）用户请在同一个 Release 下载 `imi-lan_1.0.0_x86.fpk`；`SHA256SUMS.txt` 用于校验。
+- exe 未签名，Windows SmartScreen 可能提示「更多信息 → 仍要运行」。
+
+> 下面「从源码运行」「第一次使用（源码版）」等章节面向开发者和想自行构建的人。普通用户到这一步就可以开始用了。
+
+## 从源码运行（开发者）
+
+> 普通用户请直接用上面的安装包。本节只适用于想自行构建或修改代码的情况。
 
 仓库不含登录令牌、摄像头地址和引擎二进制（都在 `.gitignore` 里），第一次克隆后需要补齐三样东西：
 
@@ -40,7 +55,9 @@
 
 之后扫码登录，令牌和摄像头地址会自动写进 `go2rtc.yaml`。
 
-## 第一次使用
+## 第一次使用（源码版）
+
+> 从 Release 安装包装的用户：双击桌面「米家监控」即可，首次只需在应用内扫码登录，不需要执行下面这些步骤。
 
 1. 双击 `启动监控.bat`。
 2. 会打开一个独立窗口（Chrome/Edge 的应用模式）。
@@ -66,7 +83,7 @@
 
 ## 桌面版（Electron）
 
-已打包的便携版：`desktop/dist/IMI-LAN-win32-x64/IMI-LAN.exe`，桌面快捷方式「米家监控」，也可以双击 `启动桌面版.bat`。
+Windows 桌面版从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 下载 `IMI-LAN-Setup-1.0.0-win-x64.exe` 安装，装好即有桌面快捷方式「米家监控」。仓库里的 `desktop/` 是它的 Electron 源码，`desktop/dist/` 只是本地构建产物（不入库）。
 
 - 独立窗口、托盘、单实例；关闭窗口会隐藏到托盘，托盘右键菜单退出
 - 自动启动并看护 go2rtc；自己启动的引擎异常退出会自动拉起
@@ -76,21 +93,21 @@
 
 首次使用（让桌面版自己管理引擎）：
 
-1. 运行 `修复网络权限（桌面版）.bat`（会弹 UAC；只给桌面版目录里的 `go2rtc.exe` 加入站规则，不影响原来的规则）
-2. 如果旧版（Edge / `启动监控.bat`）的引擎或二维码助手还在运行，先运行 `停止监控.bat`（会同时清理旧版 1985 和新版 19841 的助手），避免两个助手同时写 `go2rtc.yaml`
+1. 在安装目录右键运行 `修复网络权限（桌面版）.bat`（会弹 UAC；只给安装目录里的 `go2rtc.exe` 加入站规则，不影响原来的规则）
+2. 如果之前跑过源码版（Edge / `启动监控.bat`）的引擎或二维码助手，先在任务管理器结束相关进程（源码版可直接运行 `停止监控.bat`，会同时清理 1985 和 19841 的助手），避免两个助手同时写 `go2rtc.yaml`
 3. 双击桌面「米家监控」；之后可以在托盘菜单「重启引擎」
 
 如果启动时检测到 19840 已有引擎，桌面版会直接复用，不会再启动第二个；这时不需要做第 1 步。
 
 说明：
 
-- 便携版目录里有一份 `go2rtc.yaml`（含 token）和 `web`，和项目根目录是两份，互不影响；不要把便携版目录发给别人。
+- 安装目录里有一份 `go2rtc.yaml`（含 token）和 `web`，和项目根目录是两份，互不影响；不要把整个安装目录压缩发给别人，请让对方下载 Release 安装包。
 - exe 未签名，Windows SmartScreen 可能提示，选「更多信息 → 仍要运行」。
-- 源码在 `desktop/`，`node_modules` 是构建依赖（约 250MB）；重新打包用 `desktop/package.json` 的 `pack:portable`，打包后需要把 `go2rtc.exe`、`go2rtc.yaml`、`web`、`bin`、`qr-login.js` 和两个防火墙 bat 复制进 `desktop/dist/IMI-LAN-win32-x64/`。
+- 源码在 `desktop/`，`node_modules` 是构建依赖（约 250MB）；`desktop/package.json` 的 `pack:portable` 可生成便携版目录，需自行补齐 `go2rtc.exe`、配置、`web`、`qr-login.js` 和两个防火墙 bat。Release 里的安装程序由 NSIS 在该目录基础上打包生成。
 
 ## fnOS（飞牛）版
 
-仓库里的 `fpk/` 提供 fnOS 原生应用包（`.fpk`）。安装后，局域网内所有设备都可以用浏览器访问 `http://<飞牛地址>:1984`，第一次打开需要输入在安装向导里设置的访问密码（用户名固定 `imi`）。
+仓库里的 `fpk/` 提供 fnOS 原生应用包（`.fpk`），已构建好的 `imi-lan_1.0.0_x86.fpk` 可直接从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 下载。安装后，局域网内所有设备都可以用浏览器访问 `http://<飞牛地址>:1984`，第一次打开需要输入在安装向导里设置的访问密码（用户名固定 `imi`）。
 
 - Linux 版 go2rtc 带小米登录 401 补丁，扫码助手和网页合并到同一个端口；
 - 扫码助手依赖 fnOS 的 `nodejs_v22` 运行时，扫码登录和米家房间信息都能用；
@@ -136,10 +153,9 @@ imi-lan/
 │  ├─ style.css
 │  ├─ video-rtc.js     go2rtc 的播放器（MIT）
 │  └─ video-stream.js
-├─ desktop/            Electron 桌面版（dist/ 里是打包好的便携版）
+├─ desktop/            Electron 桌面版源码（dist/ 为本地构建产物，不入库）
 ├─ fpk/                fnOS 原生应用包（manifest、生命周期脚本、构建脚本）
-├─ 启动监控.bat        Edge 窗口版
-├─ 启动桌面版.bat      启动 Electron 便携版
+├─ 启动监控.bat        Edge 窗口版（源码版入口）
 ├─ 停止监控.bat
 ├─ 修复网络权限.bat    网页版 go2rtc 的入站规则（需要管理员）
 ├─ 修复网络权限（桌面版）.bat  桌面版 go2rtc 的入站规则（需要管理员）
@@ -170,13 +186,13 @@ imi-lan/
 - 确认摄像头在米家 App 里在线，且电脑和摄像头在同一个局域网/网段。
 - 摄像头 IP 可能变了：点「设置 → 重新导入摄像头」，重新读取设备。
 - 有些摄像头休眠后需要几秒唤醒，等 10–30 秒；门铃等电池设备首次连接会更慢。
-- 如果 Windows 弹出防火墙提示，请允许 `go2rtc.exe` 访问「专用网络」；如果从没弹过提示，右键 `修复网络权限.bat` → 以管理员身份运行。
+- 如果 Windows 弹出防火墙提示，请允许 `go2rtc.exe` 访问「专用网络」；如果从没弹过提示：安装包用户右键安装目录里的 `修复网络权限（桌面版）.bat`、源码版用户右键根目录的 `修复网络权限.bat`，以管理员身份运行。
 - 使用 Mesh 路由器（如 TP-Link Deco）时，个别摄像头会被“Mesh Technology / 客户端漫游”代理，导致局域网 UDP 握手失败；可在路由器里对该摄像头关闭该选项后重启摄像头。
 - 需要看引擎细节时打开 http://127.0.0.1:19840/api/log 。
 
 **提示“引擎未启动”**
 
-双击 `启动监控.bat`，或检查 19840 端口是否被占用。
+安装包用户：在托盘菜单点「重启引擎」，或退出后重新打开；源码版双击 `启动监控.bat`。同时检查 19840 端口是否被占用。
 
 **二维码登录提示“服务未启动”**
 
@@ -194,7 +210,7 @@ imi-lan/
 
 **想彻底删除登录信息**
 
-关闭浏览器和 go2rtc 后，删除 `go2rtc.yaml` 里的 `xiaomi:` 段，或直接删除整个 `imi-lan` 文件夹。
+退出应用后，删除 `go2rtc.yaml` 里的 `xiaomi:` 段（安装包用户在安装目录，源码版在项目根目录）；用卸载器卸载安装包会一并删除配置与日志。
 
 **延迟还是高**
 
@@ -226,7 +242,7 @@ imi-lan/
 - 二维码登录流程参考 [MijiaLAN](https://github.com/iPocket-APP/MijiaLAN) 内置的 MenuBarMijia / MijiaCore（MIT，Copyright iPocket-APP）。`qr-login.js` 是按公开协议用 Node 内置模块独立实现的，未包含其源码。
 - [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（Apache-2.0）：仅作设备兼容性与型号资料参考，未包含其代码、模板或数据文件。
 - **ffmpeg**：仓库里不含。开发时用的那个构建带 `--enable-gpl --enable-version3`，属 **GPL-3**，一旦连 `bin/` 一起再分发就产生提供源码的义务，所以自用可以、分享便携版时请把 `bin/` 去掉。
-- **Electron / Chromium**（MIT 等）：`desktop/node_modules/` 与 `desktop/dist/` 不入库；打包产物自带的 `LICENSE` 和 `LICENSES.chromium.html` 在分发时必须一起保留。
+- **Electron / Chromium**（MIT 等）：`desktop/node_modules/` 与 `desktop/dist/` 不入库；Release 安装包内含 Electron 运行时，其自带的 `LICENSE` 和 `LICENSES.chromium.html` 在分发时必须一起保留。
 
 ### 非官方与商标
 
