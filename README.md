@@ -32,13 +32,13 @@
 
 ## 安装（推荐）
 
-Windows 用户直接下载 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 里的 `IMI-LAN-Setup-1.0.0-win-x64.exe`，双击安装即可：**不需要克隆仓库、不需要自己编译 go2rtc，也不需要安装 Node.js**。
+Windows 用户直接下载 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 里的 `IMI-LAN-Setup-1.0.1-win-x64.exe`，双击安装即可：**不需要克隆仓库、不需要自己编译 go2rtc，也不需要安装 Node.js**。
 
 - 默认装到 `%LOCALAPPDATA%\Programs\IMI-LAN`（当前用户目录，无需管理员权限），安装后桌面出现「米家监控」快捷方式。
 - 首次启动：点「添加摄像头」→「二维码登录」→ 用米家 App 扫码 → 勾选要显示的摄像头。
 - 若防火墙拦截，右键安装目录里的 `修复网络权限（桌面版）.bat` → 以管理员身份运行，然后从托盘菜单「重启引擎」。
 - 安装包不含任何账号信息，安装时生成空白 `go2rtc.yaml`；令牌只在扫码后写入本机。按许可证要求未附带 GPL 构建的 `bin/ffmpeg.exe`，H.265 依赖浏览器 / 系统原生解码。
-- fnOS（飞牛）用户请在同一个 Release 下载 `imi-lan_1.0.0_x86.fpk`；`SHA256SUMS.txt` 用于校验。
+- fnOS（飞牛）用户请在同一个 Release 下载 `imi-lan_1.0.1_x86.fpk`；`SHA256SUMS.txt` 用于校验。
 - exe 未签名，Windows SmartScreen 可能提示「更多信息 → 仍要运行」。
 
 > 下面「从源码运行」「第一次使用（源码版）」等章节面向开发者和想自行构建的人。普通用户到这一步就可以开始用了。
@@ -83,7 +83,7 @@ Windows 用户直接下载 [Releases](https://github.com/pigstrong9/IMI-LAN/rele
 
 ## 桌面版（Electron）
 
-Windows 桌面版从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 下载 `IMI-LAN-Setup-1.0.0-win-x64.exe` 安装，装好即有桌面快捷方式「米家监控」。仓库里的 `desktop/` 是它的 Electron 源码，`desktop/dist/` 只是本地构建产物（不入库）。
+Windows 桌面版从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 下载 `IMI-LAN-Setup-1.0.1-win-x64.exe` 安装，装好即有桌面快捷方式「米家监控」。仓库里的 `desktop/` 是它的 Electron 源码，`desktop/dist/` 只是本地构建产物（不入库）。
 
 - 独立窗口、托盘、单实例；关闭窗口会隐藏到托盘，托盘右键菜单退出
 - 自动启动并看护 go2rtc；自己启动的引擎异常退出会自动拉起
@@ -107,7 +107,7 @@ Windows 桌面版从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 
 
 ## fnOS（飞牛）版
 
-仓库里的 `fpk/` 提供 fnOS 原生应用包（`.fpk`），已构建好的 `imi-lan_1.0.0_x86.fpk` 可直接从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 下载。安装后，局域网内所有设备都可以用浏览器访问 `http://<飞牛地址>:1984`，第一次打开需要输入在安装向导里设置的访问密码（用户名固定 `imi`）。
+仓库里的 `fpk/` 提供 fnOS 原生应用包（`.fpk`），已构建好的 `imi-lan_1.0.1_x86.fpk` 可直接从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 下载。安装后，局域网内所有设备都可以用浏览器访问 `http://<飞牛地址>:1984`，第一次打开需要输入在安装向导里设置的访问密码（用户名固定 `imi`）。
 
 - Linux 版 go2rtc 带小米登录 401 补丁，扫码助手和网页合并到同一个端口；
 - 扫码助手依赖 fnOS 的 `nodejs_v22` 运行时，扫码登录和米家房间信息都能用；

@@ -1,5 +1,5 @@
 appname               = imi-lan
-version               = 1.0.0
+version               = 1.0.1
 display_name          = IMI-LAN
 desc                  = 米家摄像头局域网直连，局域网内手机、平板、电视和电脑都能用浏览器观看。
 platform              = x86

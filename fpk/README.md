@@ -42,8 +42,8 @@ python fpk/build.py --go /path/to/go
 产物：
 
 ```text
-fpk/dist/imi-lan_1.0.0_x86.fpk
-fpk/dist/imi-lan_1.0.0_x86.fpk.sha256
+fpk/dist/imi-lan_1.0.1_x86.fpk
+fpk/dist/imi-lan_1.0.1_x86.fpk.sha256
 ```
 
 构建脚本做了这些事：
