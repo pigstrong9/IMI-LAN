@@ -1,61 +1,3 @@
---- a/pkg/xiaomi/cloud.go	2026-11-10 17:15:58.104368300 +0800
-+++ b/pkg/xiaomi/cloud.go	2026-11-10 17:16:05.622200600 +0800
-@@ -314,7 +314,20 @@
- }
- 
- func (c *Cloud) finishAuth(location string) error {
--	res, err := c.client.Get(location)
-+	req, err := http.NewRequest("GET", location, nil)
-+	if err != nil {
-+		return err
-+	}
-+	// finishAuth 需要带着登录阶段拿到的 passToken 再请求一次，
-+	// 否则小米会返回 401，拿不到 userId/cUserId/serviceToken。
-+	if c.passToken != "" {
-+		cookie := "passToken=" + c.passToken
-+		if c.userID != "" {
-+			cookie = "userId=" + c.userID + "; " + cookie
-+		}
-+		req.Header.Set("Cookie", cookie)
-+	}
-+	res, err := c.client.Do(req)
- 	if err != nil {
- 		return err
- 	}
-@@ -384,6 +397,10 @@
- 
- 	c.ssecurity = v1.Ssecurity
- 	c.passToken = v1.PassToken
-+	if c.passToken == "" {
-+		c.passToken = passToken
-+	}
-+	c.userID = userID
- 
- 	return c.finishAuth(v1.Location)
- }
-@@ -435,7 +452,7 @@
- 	defer res.Body.Close()
- 
- 	if res.StatusCode != http.StatusOK {
--		return nil, errors.New(res.Status)
-+		return nil, fmt.Errorf("%s: %s", apiURL, res.Status)
- 	}
- 
- 	body, err := io.ReadAll(res.Body)
---- a/internal/xiaomi/xiaomi.go
-+++ b/internal/xiaomi/xiaomi.go
-@@ -68,6 +68,11 @@
- 	if err := cloud.LoginWithToken(userID, tokens[userID]); err != nil {
- 		return nil, err
- 	}
-+	if _, newToken := cloud.UserToken(); newToken != "" && newToken != tokens[userID] {
-+		if err := app.PatchConfig([]string{"xiaomi", userID}, newToken); err == nil {
-+			tokens[userID] = newToken
-+		}
-+	}
- 	if clouds == nil {
- 		clouds = map[string]*xiaomi.Cloud{userID: cloud}
- 	} else {
 --- a/internal/app/config.go
 +++ b/internal/app/config.go
 @@ -37,7 +37,16 @@
@@ -76,3 +18,169 @@
  }
  
  type flagConfig []string
+--- a/internal/xiaomi/xiaomi.go
++++ b/internal/xiaomi/xiaomi.go
+@@ -1,6 +1,7 @@
+ package xiaomi
+ 
+ import (
++	"encoding/base64"
+ 	"encoding/hex"
+ 	"encoding/json"
+ 	"errors"
+@@ -21,11 +22,13 @@
+ 
+ func Init() {
+ 	var v struct {
+-		Cfg map[string]string `yaml:"xiaomi"`
++		Cfg         map[string]string            `yaml:"xiaomi"`
++		Credentials map[string]map[string]string `yaml:"xiaomi-credentials"`
+ 	}
+ 	app.LoadConfig(&v)
+ 
+ 	tokens = v.Cfg
++	creds = v.Credentials
+ 
+ 	log = app.GetLogger("xiaomi")
+ 
+@@ -53,6 +56,7 @@
+ var log zerolog.Logger
+ 
+ var tokens map[string]string
++var creds map[string]map[string]string
+ var clouds map[string]*xiaomi.Cloud
+ var cloudsMu sync.Mutex
+ 
+@@ -65,9 +69,37 @@
+ 	}
+ 
+ 	cloud := xiaomi.NewCloud(AppXiaomiHome)
+-	if err := cloud.LoginWithToken(userID, tokens[userID]); err != nil {
+-		return nil, err
++
++	// 优先使用扫码时保存的完整凭据（serviceToken+ssecurity）：
++	// 启动和运行期间都不再请求 account.xiaomi.com——每次 serviceLogin
++	// 都会让小米风控累积一次，通常半天后 passToken 就被要求二次验证
++	// （code 70016），导致登录彻底失效。
++	if cred := creds[userID]; cred != nil && cred["serviceToken"] != "" && cred["ssecurity"] != "" {
++		ssec, err := base64.StdEncoding.DecodeString(cred["ssecurity"])
++		if err != nil {
++			return nil, fmt.Errorf("xiaomi: bad ssecurity in config: %w", err)
++		}
++		cloud = xiaomi.NewCloudWithCredentials(AppXiaomiHome, userID, cred["cUserId"], cred["serviceToken"], ssec)
++		log.Info().Msg("xiaomi: using saved credentials (no account login)")
++	} else if passToken := tokens[userID]; passToken != "" {
++		if err := cloud.LoginWithToken(userID, passToken); err != nil {
++			return nil, err
++		}
++		// LoginWithToken 拿不到 serviceToken = 小米返回 70016（需要二次
++		// 验证），location 跳到的是登录页而不是 sts。此时必须重新扫码，
++		// 继续静默重试只会加重风控。
++		if !cloud.HasServiceToken() {
++			return nil, errors.New("xiaomi: 登录已失效（小米要求二次验证），请重新扫码")
++		}
++		if _, newToken := cloud.UserToken(); newToken != "" && newToken != tokens[userID] {
++			if err := app.PatchConfig([]string{"xiaomi", userID}, newToken); err == nil {
++				tokens[userID] = newToken
++			}
++		}
++	} else {
++		return nil, errors.New("xiaomi: no token for user " + userID)
+ 	}
++
+ 	if clouds == nil {
+ 		clouds = map[string]*xiaomi.Cloud{userID: cloud}
+ 	} else {
+--- a/pkg/xiaomi/cloud.go
++++ b/pkg/xiaomi/cloud.go
+@@ -42,6 +42,28 @@
+ 	}
+ }
+ 
++// NewCloudWithCredentials 直接用扫码时保存的完整云端凭据构造会话，
++// 不再请求 account.xiaomi.com。凭据来自扫码那一刻的正版浏览器会话，
++// 风控模型不会把它当作可疑的二次登录。
++func NewCloudWithCredentials(sid, userID, cUserID, serviceToken string, ssecurity []byte) *Cloud {
++	c := NewCloud(sid)
++	c.userID = userID
++	c.cookies = fmt.Sprintf("userId=%s; cUserId=%s; serviceToken=%s", userID, cUserID, serviceToken)
++	c.ssecurity = ssecurity
++	return c
++}
++
++// HasServiceToken 登录流程（finishAuth）结束后 serviceToken 是否已拿到。
++// 为空说明小米返回 70016 要求二次验证，此时必须重新扫码。
++func (c *Cloud) HasServiceToken() bool {
++	for _, kv := range strings.Split(c.cookies, "; ") {
++		if strings.HasPrefix(kv, "serviceToken=") && len(kv) > len("serviceToken=") {
++			return true
++		}
++	}
++	return false
++}
++
+ func (c *Cloud) Login(username, password string) error {
+ 	res, err := c.client.Get("https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=" + c.sid)
+ 	if err != nil {
+@@ -314,7 +336,18 @@
+ }
+ 
+ func (c *Cloud) finishAuth(location string) error {
+-	res, err := c.client.Get(location)
++	req, err := http.NewRequest("GET", location, nil)
++	if err != nil {
++		return err
++	}
++	if c.passToken != "" {
++		cookie := "passToken=" + c.passToken
++		if c.userID != "" {
++			cookie = "userId=" + c.userID + "; " + cookie
++		}
++		req.Header.Set("Cookie", cookie)
++	}
++	res, err := c.client.Do(req)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -384,8 +417,31 @@
+ 
+ 	c.ssecurity = v1.Ssecurity
+ 	c.passToken = v1.PassToken
++	if c.passToken == "" {
++		c.passToken = passToken
++	}
++	c.userID = userID
+ 
+-	return c.finishAuth(v1.Location)
++	fmt.Printf("xiaomi-login loc=%v ssec=%d pass=%d\n", v1.Location != "", len(c.ssecurity), len(c.passToken))
++	if err = c.finishAuth(v1.Location); err != nil {
++		return err
++	}
++	fmt.Printf("xiaomi-auth cookie=%s\n", maskCookies(c.cookies))
++	return nil
++}
++
++func maskCookies(s string) string {
++	parts := strings.Split(s, "; ")
++	for i, p := range parts {
++		if j := strings.IndexByte(p, '='); j >= 0 {
++			v := ""
++			if j+1 < len(p) {
++				v = "***"
++			}
++			parts[i] = p[:j] + "=" + v
++		}
++	}
++	return strings.Join(parts, "; ")
+ }
+ 
+ func (c *Cloud) UserToken() (string, string) {
+@@ -435,7 +491,7 @@
+ 	defer res.Body.Close()
+ 
+ 	if res.StatusCode != http.StatusOK {
+-		return nil, errors.New(res.Status)
++		return nil, fmt.Errorf("%s: %s", apiURL, res.Status)
+ 	}
+ 
+ 	body, err := io.ReadAll(res.Body)

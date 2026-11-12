@@ -2,8 +2,13 @@
 /* 米家二维码登录助手（默认 127.0.0.1:19841）
  *
  * 1. 向小米账号页申请二维码并长轮询扫码结果
- * 2. 拿到 passToken 后写回 go2rtc.yaml 的 xiaomi: 段
- * 3. 重启 go2rtc 让新 token 生效
+ * 2. 把扫码那一刻的完整云端凭据（serviceToken/ssecurity/cUserId/passToken）
+ *    写回 go2rtc.yaml 的 xiaomi-credentials 段；passToken 另存 xiaomi: 段兜底
+ * 3. 重启 go2rtc 让新凭据生效
+ *
+ * 云端凭据来自扫码那一刻的正版浏览器会话，引擎/助手直接使用，
+ * 不再调 account.xiaomi.com 的 serviceLogin——小米对同一 passToken 的
+ * 非浏览器登录会累积风控（70016），半天后 passToken 即失效。
  *
  * 仅使用 Node 内置模块，可由 Electron 以 ELECTRON_RUN_AS_NODE=1 启动。
  * NAS 版通过 IMI_CONFIG / IMI_HELPER_HOST / IMI_API_PORT 等环境变量定位配置和引擎。
@@ -13,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
@@ -105,6 +111,10 @@ function parseJsonp(text) {
   return JSON.parse(i >= 0 ? text.slice(i + mark.length) : text);
 }
 
+function safeHost(u) {
+  try { return new URL(u).host + new URL(u).pathname; } catch { return '(bad url)'; }
+}
+
 function cookieHeader(session) {
   return [...session.cookies.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
 }
@@ -116,8 +126,22 @@ function storeCookies(session, res) {
   for (const item of list) {
     const pair = String(item).split(';')[0];
     const i = pair.indexOf('=');
-    if (i > 0) session.cookies.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
+    if (i <= 0) continue;
+    const name = pair.slice(0, i).trim();
+    const value = pair.slice(i + 1).trim();
+    if (/^EXPIRED$/i.test(value)) {
+      session.cookies.delete(name); // 清除型 cookie：直接丢弃
+      continue;
+    }
+    session.cookies.set(name, value);
   }
+}
+
+// 小米用 passToken=EXPIRED 这类字面量做「清除」cookie（匿名访问 account
+// 时就会下发）。把它当成没有，否则会把毒值当成真 token 存进配置。
+function realCookie(jar, name) {
+  const v = jar.get(name) || '';
+  return /^EXPIRED$/i.test(v) || !v ? '' : v;
 }
 
 async function request(session, url, timeout = 20000) {
@@ -178,6 +202,16 @@ function apiUp() {
   });
 }
 
+// 进程退出后 Windows 可能仍短暂占用端口（立刻重启会 bind 失败，
+// 留下不监听任何端口的僵尸引擎）。用试探性 bind 判断端口真正可用。
+function portFree(port, host = '127.0.0.1') {
+  return new Promise(resolve => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.listen(port, host, () => srv.close(() => resolve(true)));
+  });
+}
+
 function apiPost(path) {
   return new Promise(resolve => {
     const req = http.request({
@@ -221,6 +255,11 @@ async function restartEngine() {
       await sleep(250);
     }
   }
+  // 等 API 端口真正可 bind（查 LISTENING pid 为 0 不代表 socket 已释放）
+  for (let i = 0; i < 40; i++) {
+    if (await portFree(API_PORT)) break;
+    await sleep(250);
+  }
   log('starting go2rtc');
   let out = 'ignore';
   try {
@@ -251,7 +290,8 @@ async function restartEngine() {
   return false;
 }
 
-function saveToken(user, token) {
+function saveToken(user, cred) {
+  // cred: { passToken, serviceToken, ssecurity, cUserId }
   const original = fs.readFileSync(CONFIG);
   fs.writeFileSync(CONFIG + '.bak', original);
 
@@ -259,43 +299,31 @@ function saveToken(user, token) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const lines = text.split(/\r?\n/);
 
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^xiaomi:\s*(?:#.*)?$/.test(lines[i])) { start = i; break; }
+  // xiaomi: {user: passToken} —— 旧格式，引擎没有完整凭据时的兜底
+  if (!upsertFlatEntry(lines, /^xiaomi:\s*(?:#.*)?$/, user, cred.passToken)) {
+    insertTopLevel(lines, 'xiaomi:', `  ${JSON.stringify(user)}: ${JSON.stringify(cred.passToken)}`);
   }
 
-  if (start >= 0) {
-    let end = lines.length;
-    for (let j = start + 1; j < lines.length; j++) {
-      if (/^\S/.test(lines[j])) { end = j; break; }
+  // xiaomi-credentials: {user: {serviceToken, ssecurity, cUserId, passToken}}
+  // 引擎优先使用这组凭据，启动时不再请求 account.xiaomi.com
+  if (cred.serviceToken && cred.ssecurity) {
+    const fields = {
+      serviceToken: cred.serviceToken,
+      ssecurity: cred.ssecurity,
+      cUserId: cred.cUserId || '',
+      passToken: cred.passToken,
+    };
+    if (!upsertNestedEntry(lines, /^xiaomi-credentials:\s*(?:#.*)?$/, user, fields)) {
+      insertTopLevel(lines, 'xiaomi-credentials:', `  ${JSON.stringify(user)}: ${JSON.stringify(fields)}`);
     }
-    const entries = {};
-    for (let k = start + 1; k < end; k++) {
-      const m = lines[k].match(/^\s+("[^"]+"|[^:\s]+)\s*:\s*(.*?)\s*$/);
-      if (!m) continue;
-      const key = m[1].replace(/^"|"$/g, '');
-      let value = m[2].trim();
-      if (value.length >= 2 && value[0] === '"' && value.endsWith('"')) {
-        value = value.slice(1, -1);
-      }
-      entries[key] = value;
-    }
-    entries[user] = token;
-    const block = ['xiaomi:', ...Object.entries(entries).map(
-      ([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`
-    )];
-    lines.splice(start, end - start, ...block);
   } else {
-    let idx = lines.length;
-    for (let i = 0; i < lines.length; i++) {
-      if (/^streams:\s*$/.test(lines[i])) { idx = i; break; }
-    }
-    const block = ['xiaomi:', `  ${JSON.stringify(user)}: ${JSON.stringify(token)}`];
-    if (idx < lines.length) block.push('');
-    lines.splice(idx, 0, ...block);
+    // 凭据不完整：清掉该用户的旧凭据，避免引擎拿着半死凭据瞎试
+    removeNestedEntry(lines, /^xiaomi-credentials:\s*(?:#.*)?$/, user);
   }
 
-  fs.writeFileSync(CONFIG, lines.join(eol), 'utf8');
+  const tmp = CONFIG + '.tmp';
+  fs.writeFileSync(tmp, lines.join(eol), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, CONFIG);
   if (process.platform !== 'win32') {
     try { fs.chmodSync(CONFIG, 0o600); } catch {}
   }
@@ -303,6 +331,115 @@ function saveToken(user, token) {
   authCache = { key: '', at: 0, auth: null, token: '' };
   roomsFail = { key: '', at: 0, message: '' };
   log(`token saved for ${mask(user)}`);
+}
+
+// ---- yaml 手术工具：只在顶层段内做「按用户」的增改 --------------------
+
+function blockRange(lines, headerRe) {
+  const start = lines.findIndex(l => headerRe.test(l));
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let j = start + 1; j < lines.length; j++) {
+    if (/^\S/.test(lines[j])) { end = j; break; }
+  }
+  return { start, end };
+}
+
+function unquote(v) {
+  if (v.length >= 2 && v[0] === '"' && v.endsWith('"')) return v.slice(1, -1);
+  return v;
+}
+
+function insertTopLevel(lines, header, line) {
+  let idx = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^streams:\s*$/.test(lines[i])) { idx = i; break; }
+  }
+  const block = [header, line];
+  if (idx < lines.length) block.push('');
+  lines.splice(idx, 0, ...block);
+}
+
+function upsertFlatEntry(lines, headerRe, user, value) {
+  const range = blockRange(lines, headerRe);
+  if (!range) return false;
+  const { start, end } = range;
+  const entries = {};
+  for (let k = start + 1; k < end; k++) {
+    const m = lines[k].match(/^\s+("[^"]+"|[^:\s]+)\s*:\s*(.*?)\s*$/);
+    if (!m) continue;
+    const v = m[2].trim();
+    if (v.startsWith('{')) continue; // 嵌套结构不属于扁平段
+    entries[unquote(m[1])] = unquote(v);
+  }
+  entries[user] = value;
+  const block = [lines[start], ...Object.entries(entries).map(
+    ([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`
+  )];
+  lines.splice(start, end - start, ...block);
+  return true;
+}
+
+function upsertNestedEntry(lines, headerRe, user, fields) {
+  const range = blockRange(lines, headerRe);
+  if (!range) return false;
+  const { start, end } = range;
+  const entries = {};
+  for (let k = start + 1; k < end; k++) {
+    const m = lines[k].match(/^\s+("[^"]+"|[^:\s]+)\s*:\s*(\{.*\})\s*$/);
+    if (m) entries[unquote(m[1])] = parseFlowMap(m[2]) || {};
+  }
+  entries[user] = fields;
+  const block = [lines[start], ...Object.entries(entries).map(
+    ([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`
+  )];
+  lines.splice(start, end - start, ...block);
+  return true;
+}
+
+function removeNestedEntry(lines, headerRe, user) {
+  const range = blockRange(lines, headerRe);
+  if (!range) return;
+  const { start, end } = range;
+  const entries = {};
+  for (let k = start + 1; k < end; k++) {
+    const m = lines[k].match(/^\s+("[^"]+"|[^:\s]+)\s*:\s*(\{.*\})\s*$/);
+    if (m && unquote(m[1]) !== user) entries[unquote(m[1])] = parseFlowMap(m[2]) || {};
+  }
+  const block = Object.entries(entries).map(
+    ([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`
+  );
+  if (block.length) block.unshift(lines[start]);
+  lines.splice(start, end - start, ...block);
+}
+
+// 解析 {"a":"b"} 形式的 YAML flow mapping（JSON 兼容写法）
+function parseFlowMap(text) {
+  try {
+    const v = JSON.parse(text);
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+  } catch {}
+  return null;
+}
+
+function readCredentials() {
+  try {
+    const lines = fs.readFileSync(CONFIG, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/);
+    const range = blockRange(lines, /^xiaomi-credentials:\s*(?:#.*)?$/);
+    if (!range) return {};
+    const out = {};
+    for (let i = range.start + 1; i < range.end; i++) {
+      const m = lines[i].match(/^\s+("[^"]+"|[^:\s]+)\s*:\s*(.*?)\s*$/);
+      if (!m) continue;
+      const parsed = parseFlowMap(m[2].trim());
+      if (parsed && parsed.serviceToken && parsed.ssecurity) {
+        out[unquote(m[1])] = parsed;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -453,6 +590,21 @@ function once(key, task) {
   return p;
 }
 
+// 有完整凭据时直接构造会话，不请求 account.xiaomi.com。
+// 每次 serviceLogin 都会累积一次风控（70016），能免则免。
+function authFromCredentials(user) {
+  const cred = readCredentials()[user];
+  if (!cred) return null;
+  let ssecurity;
+  try { ssecurity = Buffer.from(String(cred.ssecurity), 'base64'); } catch { return null; }
+  if (!ssecurity.length || !cred.serviceToken) return null;
+  const session = { cookies: new Map() };
+  session.cookies.set('userId', user);
+  if (cred.cUserId) session.cookies.set('cUserId', cred.cUserId);
+  session.cookies.set('serviceToken', cred.serviceToken);
+  return { session, ssecurity };
+}
+
 function getAuth(user, token, force = false) {
   const key = user;
   if (force && authCache.key === key) authCache = { key: '', at: 0, auth: null, token: '' };
@@ -460,6 +612,12 @@ function getAuth(user, token, force = false) {
     // 排队等锁期间，前一个调用可能已经登录完了
     if (authCache.auth && authCache.key === key && Date.now() - authCache.at < AUTH_TTL) {
       return { auth: authCache.auth, token: authCache.token };
+    }
+    const direct = authFromCredentials(user);
+    if (direct) {
+      const configToken = readXiaomiTokens()[user] || token;
+      authCache = { key, at: Date.now(), auth: direct, token: configToken };
+      return { auth: direct, token: configToken };
     }
     const auth = await cloudLogin(user, token);
     authCache = { key, at: Date.now(), auth, token };
@@ -536,6 +694,7 @@ async function loadRooms(user, region) {
     const token = tokens[user];
     if (!token) throw new Error('没有可用的登录令牌');
 
+    const direct = authFromCredentials(user);
     let login = await getAuth(user, token);
     let auth = login.auth;
     persistRefreshedToken(user, token, auth, login.token);
@@ -545,6 +704,10 @@ async function loadRooms(user, region) {
       home = await cloudRequest(auth, region, '/v2/homeroom/gethome', homeBody);
     } catch (e) {
       if (!/HTTP 401/.test(e.message)) throw e;
+      if (direct) {
+        // serviceToken 已失效：重新走一次完整登录只会触发风控，直接要求重扫
+        throw new Error('登录已失效，请重新扫码');
+      }
       login = await getAuth(user, token, true);
       auth = login.auth;
       persistRefreshedToken(user, token, auth, login.token);
@@ -682,21 +845,66 @@ class QRSession {
     this.message = '已扫码，请在手机上确认';
     log(`scanned by ${mask(this.user)}`);
 
+    // 把整条 location 链走到头：sts 那一跳会签发 serviceToken（Cookie）
+    // 和 ssecurity（Extension-Pragma 头）。以前一拿到 passToken 就停，
+    // 漏掉了 serviceToken/ssecurity，引擎启动时只能再用 passToken 静默
+    // 登录一次——这正是触发小米风控（70016）的主因。
     let loc = data.location;
-    for (let i = 0; i < 8 && loc; i++) {
+    let ssecurity = '';
+    for (let i = 0; i < 12 && loc; i++) {
       let res = null;
       try {
         res = await request(this, loc, 25000);
         await res.arrayBuffer();
       } catch {}
-      if (this.cookies.get('passToken')) break;
+      if (res) {
+        const ext = res.headers.get('extension-pragma');
+        if (ext) {
+          try { ssecurity = String(JSON.parse(ext).ssecurity || '') || ssecurity; } catch {}
+        }
+        log(`login hop ${i + 1}: ${safeHost(loc)} -> ${res.status} ` +
+          `serviceToken=${realCookie(this.cookies, 'serviceToken') ? 'ok' : 'no'} ssecurity=${ssecurity ? 'ok' : 'no'}`);
+      }
       const next = res?.headers.get('location');
       if (!next) break;
       try { loc = new URL(next, loc).toString(); } catch { break; }
     }
 
-    const token = this.cookies.get('passToken') || '';
-    if (!token) {
+    let cred = {
+      passToken: realCookie(this.cookies, 'passToken'),
+      serviceToken: realCookie(this.cookies, 'serviceToken'),
+      cUserId: realCookie(this.cookies, 'cUserId'),
+      ssecurity,
+    };
+
+    // 兜底：链上没给 ssecurity 时，用刚扫到的 passToken 走一次完整
+    // serviceLogin（userId+passToken 形态，与引擎 LoginWithToken 相同；
+    // 扫码授权后立即可用）。code=0 的响应带 ssecurity，location 链带
+    // 回 serviceToken。绝不能用 serviceToken-only 形态——小米会直接
+    // 70016（serviceLogin 需要 passToken 做主凭据）。
+    if (cred.passToken && !cred.ssecurity) {
+      try {
+        const { session: s2, ssecurity: ssec2 } = await cloudLogin(this.user, cred.passToken);
+        cred.ssecurity = ssec2.toString('base64');
+        for (const name of ['cUserId', 'serviceToken']) {
+          const v = realCookie(s2.cookies, name);
+          if (v) this.cookies.set(name, v);
+        }
+        const np = realCookie(s2.cookies, 'passToken');
+        if (np) this.cookies.set('passToken', np);
+        cred = {
+          passToken: realCookie(this.cookies, 'passToken'),
+          serviceToken: realCookie(this.cookies, 'serviceToken'),
+          cUserId: realCookie(this.cookies, 'cUserId'),
+          ssecurity: cred.ssecurity,
+        };
+        log('credentials completed via serviceLogin');
+      } catch (e) {
+        log(`serviceLogin fallback failed: ${e.message}`);
+      }
+    }
+
+    if (!cred.passToken) {
       this.state = 'error';
       this.message = '登录成功但没拿到 passToken，请重试';
       log(`missing passToken for ${mask(this.user)}`);
@@ -704,10 +912,16 @@ class QRSession {
     }
     if (this.canceled) { this.state = 'canceled'; return; }
 
+    const complete = cred.serviceToken && cred.ssecurity;
+    if (!complete) {
+      log(`incomplete credentials for ${mask(this.user)}: ` +
+        `serviceToken=${cred.serviceToken ? 'ok' : 'missing'} ssecurity=${cred.ssecurity ? 'ok' : 'missing'}`);
+    }
+
     this.state = 'restarting';
     this.message = '登录成功，正在重启引擎';
     try {
-      saveToken(this.user, token);
+      saveToken(this.user, cred);
     } catch (e) {
       this.state = 'error';
       this.message = '写入 go2rtc.yaml 失败：' + e.message;
@@ -721,7 +935,7 @@ class QRSession {
       return;
     }
     this.state = 'done';
-    this.message = '登录成功';
+    this.message = complete ? '登录成功' : '登录成功（云端会话不完整，已用兼容模式保存）';
   }
 }
 
