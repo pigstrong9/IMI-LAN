@@ -22,6 +22,18 @@ desktop/out/
 fpk/.build/
 fpk/dist/
 
+# Android 构建产物与本地配置
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+android/app/src/main/assets/web/
+android/dist/
+android/keystore.properties
+*.jks
+*.keystore
+
 # UI 原型草稿：离线生成物，含内嵌画面、房间命名和局域网 IP，不入库
 design/
 

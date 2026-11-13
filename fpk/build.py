@@ -116,11 +116,11 @@ def apply_patch(src_dir: Path) -> None:
     die("could not apply fpk/patches/xiaomi-login.patch")
 
 
-def go_env() -> dict[str, str]:
+def go_env(goos: str = "linux", goarch: str = "amd64") -> dict[str, str]:
     env = os.environ.copy()
     env.update({
-        "GOOS": "linux",
-        "GOARCH": "amd64",
+        "GOOS": goos,
+        "GOARCH": goarch,
         "CGO_ENABLED": "0",
         "GO111MODULE": "on",
         "GOTOOLCHAIN": "local",
@@ -131,10 +131,11 @@ def go_env() -> dict[str, str]:
     return env
 
 
-def build_go(go: str, cwd: Path, out: Path) -> None:
-    info(f"building {out.name}")
+def build_go(go: str, cwd: Path, out: Path,
+             goos: str = "linux", goarch: str = "amd64") -> None:
+    info(f"building {out.name} ({goos}/{goarch})")
     cmd = [go, "build", "-trimpath", "-ldflags", "-s -w", "-o", str(out), "."]
-    res = subprocess.run(cmd, cwd=cwd, env=go_env())
+    res = subprocess.run(cmd, cwd=cwd, env=go_env(goos, goarch))
     if res.returncode != 0:
         die(f"go build failed in {cwd}")
 

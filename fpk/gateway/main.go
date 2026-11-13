@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -103,6 +104,28 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+func tokenAuth(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 健康检查不要求令牌，便于客户端启动阶段探测（也用于确认端口上是自己的网关）
+		if r.URL.Path == "/health" || r.URL.Path == "/__imi/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		got := ""
+		if c, err := r.Cookie("imi_app"); err == nil {
+			got = c.Value
+		}
+		if got == "" {
+			got = r.Header.Get("X-IMI-Token")
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func newProxy(raw string) *httputil.ReverseProxy {
 	target, err := url.Parse(raw)
 	if err != nil {
@@ -126,26 +149,40 @@ func main() {
 		user       = flag.String("user", "imi", "basic auth user")
 		passFile   = flag.String("pass-file", "", "file containing the access password")
 		secretFile = flag.String("secret-file", "", "file containing the cookie signing secret")
+		noAuth     = flag.Bool("no-auth", false, "disable password auth (loopback/app mode)")
+		appToken   = flag.String("app-token", "", "require this token in the imi_app cookie or X-IMI-Token header (app mode)")
+		instanceID = flag.String("instance-id", "", "echo this id from /__imi/health so the app can tell its own gateway apart")
+		enableQR   = flag.Bool("qr", false, "serve built-in QR login instead of proxying to the node helper")
+		configPath = flag.String("config", "", "go2rtc.yaml path (required with -qr)")
+		logDir     = flag.String("log-dir", "", "directory for qr-login.log (default: next to -config)")
 	)
 	flag.Parse()
 
-	if *staticDir == "" || *passFile == "" || *secretFile == "" {
-		log.Fatal("-static, -pass-file and -secret-file are required")
+	if *staticDir == "" {
+		log.Fatal("-static is required")
+	}
+	if !*noAuth && (*passFile == "" || *secretFile == "") {
+		log.Fatal("-pass-file and -secret-file are required unless -no-auth is set")
+	}
+	if *enableQR && *configPath == "" {
+		log.Fatal("-config is required with -qr")
 	}
 	if _, err := os.Stat(filepath.Join(*staticDir, "index.html")); err != nil {
 		log.Fatalf("static dir %s: %v", *staticDir, err)
 	}
 
 	username = *user
-	password = readSecret(*passFile)
-	if len(password) == 0 {
-		log.Fatal("access password is empty")
+	if !*noAuth {
+		password = readSecret(*passFile)
+		if len(password) == 0 {
+			log.Fatal("access password is empty")
+		}
+		secret := readSecret(*secretFile)
+		if len(secret) == 0 {
+			log.Fatal("cookie secret is empty")
+		}
+		cookieValue = cookieFor(username, password, secret)
 	}
-	secret := readSecret(*secretFile)
-	if len(secret) == 0 {
-		log.Fatal("cookie secret is empty")
-	}
-	cookieValue = cookieFor(username, password, secret)
 
 	go2rtcProxy := newProxy(*go2rtcAddr)
 	helperProxy := newProxy(*helperAddr)
@@ -159,7 +196,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__imi/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "service": "imi-gateway"})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true, "service": "imi-gateway", "instance": *instanceID,
+		})
 	})
 	mux.HandleFunc("/__imi/logout", func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
@@ -176,16 +215,39 @@ func main() {
 	})
 	mux.Handle("/api", go2rtcProxy)
 	mux.Handle("/api/", go2rtcProxy)
-	mux.Handle("/qr", helperProxy)
-	mux.Handle("/qr/", helperProxy)
-	mux.Handle("/rooms", helperProxy)
+	if *enableQR {
+		qrLog := *logDir
+		if qrLog == "" {
+			qrLog = filepath.Dir(*configPath)
+		}
+		qr := newQRService(*configPath, *go2rtcAddr, filepath.Join(qrLog, "qr-login.log"))
+		qr.register(mux)
+	} else {
+		mux.Handle("/qr", helperProxy)
+		mux.Handle("/qr/", helperProxy)
+		mux.Handle("/rooms", helperProxy)
+	}
 	mux.Handle("/", staticHandler)
 
+	handler := http.Handler(mux)
+	if !*noAuth {
+		handler = auth(handler)
+	}
+	if *appToken != "" {
+		handler = tokenAuth(*appToken, handler)
+	}
+	handler = securityHeaders(handler)
+
 	srv := &http.Server{
-		Addr:              *listen,
-		Handler:           securityHeaders(auth(mux)),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       5 * time.Minute,
+	}
+
+	// 先绑定端口再打日志，端口被占用时立即退出，方便 App 识别启动失败。
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatalf("listen %s: %v", *listen, err)
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -198,7 +260,7 @@ func main() {
 	}()
 
 	log.Printf("imi-gateway listening on %s (go2rtc=%s helper=%s)", *listen, *go2rtcAddr, *helperAddr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">米家监控</string>
+    <string name="starting">正在启动本机引擎…</string>
+    <string name="engine_failed">引擎启动失败</string>
+    <string name="retry">重试</string>
+    <string name="notif_channel">后台运行</string>
+    <string name="notif_channel_desc">保持局域网直连引擎在后台运行</string>
+    <string name="notif_running">局域网直连引擎运行中</string>
+    <string name="notif_restart">重启引擎</string>
+    <string name="notif_stop">退出</string>
+    <string name="saved">已保存</string>
+</resources>

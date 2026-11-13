@@ -113,6 +113,27 @@ Windows 桌面版从 [Releases](https://github.com/pigstrong9/IMI-LAN/releases) 
 - 扫码助手依赖 fnOS 的 `nodejs_v22` 运行时，扫码登录和米家房间信息都能用；
 - 构建、安装、密码修改和常见问题见 [fpk/README.md](fpk/README.md)。
 
+## 安卓版（手机独立运行）
+
+`android/` 提供本机独立版 APK：go2rtc、网关和扫码登录全部跑在手机里，不需要电脑或飞牛，也不用装 Node。打开 App 就是和桌面版一样的网页界面。
+
+- 只监听 `127.0.0.1:19841`，用同源 Cookie 里的随机令牌认证，同机其他应用读不到小米 token；
+- 扫码登录由 Go 版助手完成，扫码成功后网络可断开，局域网观看不经过云端；
+- 截图 / 录像保存到相册的 `Pictures/IMI-LAN`、`Movies/IMI-LAN`；
+- 安卓 WebView 对 H.265 支持参差，默认走「流畅」子码流（导入时即落子码流），可在卡片上手动切「高清」；
+- 前台服务常驻，切后台或锁屏后继续推流，异常退出 15 秒内自动拉起；
+- 目前只提供 arm64-v8a 与 x86_64（模拟器）两个 ABI。
+
+构建（需要 Go、JDK 17+、Android SDK 35、Gradle 8.13+）：
+
+```bash
+python android/build.py --go /path/to/go --gradle /path/to/gradle --jdk /path/to/jdk
+# 只出真机 arm64 包：
+python android/build.py --abi arm64-v8a
+```
+
+产物在 `android/dist/`，debug 包可直接 `adb install`。签名、数据目录和已知限制见 [android/README.md](android/README.md)。
+
 ## 功能
 
 - 多路摄像头网格，自动播放
@@ -155,6 +176,7 @@ imi-lan/
 │  └─ video-stream.js
 ├─ desktop/            Electron 桌面版源码（dist/ 为本地构建产物，不入库）
 ├─ fpk/                fnOS 原生应用包（manifest、生命周期脚本、构建脚本）
+├─ android/            安卓本机独立版（WebView 壳 + Go 交叉编译 + Gradle 工程）
 ├─ 启动监控.bat        Edge 窗口版（源码版入口）
 ├─ 停止监控.bat
 ├─ 修复网络权限.bat    网页版 go2rtc 的入站规则（需要管理员）
@@ -170,6 +192,7 @@ imi-lan/
 - 小米账号密码只在登录时提交给本机的 go2rtc，不会保存；保存的是登录令牌（在 `go2rtc.yaml` 里）。
 - 摄像头密钥每次连接时向小米云端获取；音视频本身不经过公网。
 - 二维码登录助手 `qr-login.js` 只监听回环地址（桌面版 `127.0.0.1:19841`，fnOS 版 `127.0.0.1:1985` 由网关代理）；它不会把 token 返回给网页，只写入 `go2rtc.yaml`，日志里只记录脱敏账号。
+- 安卓版所有进程只监听 `127.0.0.1`；网关额外要求 WebView 注入的随机 `imi_app` Cookie（应用私有存储），同机其他应用即使访问 19841 也拿不到 token。
 - 不要把 `go2rtc.yaml` 发给别人，里面有账号令牌。
 - `go2rtc.yaml`、`go2rtc.yaml.bak`、`*.log` 和 `desktop/dist/` 都已在 `.gitignore` 里；提交前用 `git status` 再确认一遍没有把它们带进去。
 - 日志会记录配置文件的绝对路径（含 Windows 用户名）以及摄像头 IP 和设备 ID，往 issue 里贴日志前先删掉这几项。

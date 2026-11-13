@@ -72,3 +72,16 @@ SOFTWARE.
 - 项目：https://nodejs.org （MIT）
 - 使用方式：fnOS 版在 `manifest` 里声明 `install_dep_apps=nodejs_v22`，由飞牛应用中心安装运行时并调用它启动二维码助手；本项目**不随包分发** Node.js 二进制。
 - 说明：electron-packager 的产物自带 `LICENSE` 和 `LICENSES.chromium.html`（Chromium 及其依赖的完整第三方声明）。若要分发便携版，这两个文件必须一起保留。
+
+## Android 版：Go 运行时与 Kotlin（BSD / Apache-2.0）
+
+- Go（BSD-3-Clause）：https://go.dev 。安卓版的 go2rtc 与网关是用 Go 交叉编译的 Linux 二进制，随 APK 分发；其许可证与版权声明见 Go 源码树的 `LICENSE`。
+- Kotlin 标准库与 Android Gradle Plugin（Apache-2.0）：仅用于构建 App 壳，运行时随 APK 附带 Kotlin 标准库。
+- Android 平台代码（Apache-2.0）：来自 Android SDK，不随本项目源码分发。
+
+## CA 证书包（MPL-2.0）
+
+- 来源：Mozilla 的 CA 证书库，经 Python `certifi` 汇总。
+- 使用方式：`android/app/src/main/assets/ca.pem` 随 APK 分发，供 Go 的 `x509` 在 Android 上校验 HTTPS（`SSL_CERT_FILE`）。证书本身不属于版权客体，汇总文件按 MPL-2.0 使用。
+- 更新方式：从 https://github.com/certifi/python-certifi 取最新 `cacert.pem` 覆盖即可。
+

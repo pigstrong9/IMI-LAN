@@ -30,6 +30,9 @@ const QR_ORIGIN = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.h
 
 // 桌面版加载页面时带 ?app=1，用来区分提示语（托盘重启 vs 运行 bat）
 const IS_APP = new URLSearchParams(location.search).has('app');
+// 安卓 WebView：主码流多为 H.265，移动端硬解不稳定，默认走子码流（一般是 H.264）。
+// 只有安卓壳会注入 IMIAndroid 桥；桌面版和浏览器里这个值为 false。
+const PREFER_SD = !!(window.IMIAndroid && window.IMIAndroid.preferSD && window.IMIAndroid.preferSD());
 
 // 后台保持连接最多维持 2 分钟，之后释放视频解码与引擎缓冲，回到前台自动重连
 const BACKGROUND_IDLE_MS = 2 * 60 * 1000;
@@ -102,12 +105,38 @@ function stamp() {
 }
 
 function download(blob, filename) {
+  if (window.IMIAndroid && window.IMIAndroid.beginDownload) {
+    saveBlobToAndroid(blob, filename);
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// WebView 里 <a download> 保存 blob 不会触发下载，分块交给安卓壳写入相册
+async function saveBlobToAndroid(blob, filename) {
+  let id = '';
+  try {
+    id = window.IMIAndroid.beginDownload(filename, blob.type || 'application/octet-stream');
+    const CHUNK = 512 * 1024;
+    for (let off = 0; off < blob.size; off += CHUNK) {
+      const buf = new Uint8Array(await blob.slice(off, off + CHUNK).arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < buf.length; i += 0x8000) {
+        bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+      }
+      window.IMIAndroid.appendDownload(id, btoa(bin));
+    }
+    window.IMIAndroid.finishDownload(id);
+    id = '';
+  } catch (e) {
+    if (id) window.IMIAndroid.abortDownload(id);
+    toast('保存失败：' + e.message, true);
+  }
 }
 
 function parseInfo(info) {
@@ -2232,8 +2261,10 @@ async function addSelected() {
       const u = new URL(source.url);
       const did = source.did || u.searchParams.get('did') || '';
       const model = u.searchParams.get('model') || '';
+      // 安卓：导入时就把流地址落到子码流，避免一上来解 H.265 主码流
+      const src = PREFER_SD ? withSubtype(source.url, 'sd', model) : source.url;
 
-      await api(`/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(source.url)}`, {
+      await api(`/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(src)}`, {
         method: 'PUT',
       });
 
@@ -2247,10 +2278,11 @@ async function addSelected() {
         ip: source.ip,
         mac: source.mac,
         did,
-        src: source.url,
+        src,
         user: state.user,
         region: state.region,
         addedAt: Date.now(),
+        ...(PREFER_SD ? { quality: 'sd' } : {}),
       };
     }
 
@@ -2283,7 +2315,7 @@ function updateCardQuality(name) {
   $$('[data-quality-label]', card.el).forEach(el => { el.textContent = label; });
 }
 
-async function applyQuality(name, q) {
+async function applyQuality(name, q, silent = false) {
   const info = streamInfo(name);
   const meta = state.meta[name] || (state.meta[name] = {
     name: info.meta.name || name,
@@ -2322,11 +2354,24 @@ async function applyQuality(name, q) {
     state.cards.get(name)?.reload();
     if (viewer) recreateViewerPlayer();
     updateCardQuality(name);
-    toast(q === 'sd' ? '已切换到流畅画质，正在重连' : '已切换到高清画质，正在重连');
+    if (!silent) toast(q === 'sd' ? '已切换到流畅画质，正在重连' : '已切换到高清画质，正在重连');
     return true;
   } catch (e) {
-    toast('切换失败：' + e.message, true);
+    if (!silent) toast('切换失败：' + e.message, true);
     return false;
+  }
+}
+
+// 把流地址里的 subtype 换成指定画质对应的编号（各型号映射不同）
+function withSubtype(src, q, model) {
+  const map = QUALITY_BY_MODEL[model] || QUALITY_BY_MODEL._default;
+  const subtype = map[q] ?? map.hd;
+  try {
+    const u = new URL(src);
+    u.searchParams.set('subtype', String(subtype));
+    return u.toString();
+  } catch {
+    return src;
   }
 }
 
@@ -2804,6 +2849,13 @@ async function init() {
     try { await syncRooms(); } catch {}
   }
   await refreshStreams();
+
+  // 安卓首次运行（含从桌面版拷来的旧配置）：把没记录画质的摄像头切到子码流
+  if (PREFER_SD && localStorage.getItem('imi.sdDefault') !== '1') {
+    await ensureSdDefault();
+    localStorage.setItem('imi.sdDefault', '1');
+  }
+
   setTimeout(syncDeviceMeta, 6000);
 
   startPolling();
