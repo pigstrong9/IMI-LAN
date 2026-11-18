@@ -313,8 +313,9 @@ svg.ic { flex: none; }
 .grid.single .card-tools { opacity: 0; }
 .grid.single .card:hover .card-tools { opacity: 1; transform: none; }
 .grid.single .card-tools .del { display: none; }
-.grid.single .card-media video { object-fit: contain !important; }
-.grid.single.fill .card-media video { object-fit: cover !important; }
+/* 单画面的 object-fit 由 makePlayer / applyFitLive 直接写到 video 上。
+   旧规则按 .fill（现在表示「窗口比例=自适应」）强行覆盖，导致「填充方式」
+   在 1×1 下完全失效，这里不再用 !important 抢 inline style。 */
 .card-media::after {
   content: "";
   position: absolute;
@@ -766,6 +767,7 @@ body.wall .grid { grid-template-rows: none !important; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .quality-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.quality-btn.on { background: rgba(255, 255, 255, 0.14); color: #fff; border-color: rgba(255, 255, 255, 0.24); }
 
 .quality-menu {
   position: absolute;
@@ -1089,20 +1091,20 @@ body.wall .wall-exit { display: grid; }
 
 /* 触屏设备加大可点区域；平板配合 viewport 放大，按钮接近 48dp 的触控标准。 */
 @media (pointer: coarse) {
-  .icon-btn { width: 40px; height: 40px; }
+  .icon-btn { width: 44px; height: 44px; }
   .icon-btn .ic { width: 20px; height: 20px; }
-  .layout-btn { height: 40px; padding: 0 11px; }
-  .add-btn { height: 40px; padding: 0 14px; }
+  .layout-btn { height: 44px; padding: 0 11px; }
+  .add-btn { height: 44px; padding: 0 14px; }
   .account { height: 44px; }
   .card-menu-btn, .hero-expand { width: 40px; height: 40px; }
   .tool { width: 38px; height: 38px; }
   .btn { min-height: 40px; padding: 9px 14px; }
   .btn.small { min-height: 34px; padding: 7px 12px; }
-  .modal-close { width: 40px; height: 40px; }
+  .modal-close { width: 44px; height: 44px; }
   .login-tab { padding: 11px 12px; }
-  .seg button { height: 34px; }
-  .viewer-actions .icon-btn { width: 40px; height: 40px; }
-  .quality-btn { height: 40px; padding: 0 11px; }
+  .seg button { height: 44px; }
+  .viewer-actions .icon-btn { width: 44px; height: 44px; }
+  .quality-btn { height: 44px; padding: 0 11px; }
   .viewer-chips button { height: 30px; padding: 0 11px; }
   .foot-tools button { width: 32px; height: 32px; }
   .device { padding: 13px 13px; border-radius: 14px; }
@@ -1183,19 +1185,19 @@ body.wall .wall-exit { display: grid; }
   /* 手机上只留「状态 + 必要操作」，其余收进设置抽屉 */
   .engine, #btnTheme, .online-badge, .account { display: none; }
 
-  .layout-btn { height: 34px; padding: 0 8px; gap: 4px; border-radius: 10px; }
+  .layout-btn { height: 44px; padding: 0 10px; gap: 4px; border-radius: 10px; }
   .layout-btn .chev { display: block; }      /* 只留图标会看不出这是下拉 */
   .add-btn {
-    width: 36px; height: 34px;
+    width: 44px; height: 44px;
     padding: 0;
     justify-content: center;
     border-radius: 10px;
   }
   .add-btn span { display: none; }
-  .icon-btn { width: 36px; height: 36px; border-radius: 10px; }
+  .icon-btn { width: 44px; height: 44px; border-radius: 10px; }
   .icon-btn .ic { width: 19px; height: 19px; }
-  /* 画质按钮要跟着一起缩，否则和两侧图标高矮不齐 */
-  .quality-btn { height: 36px; padding: 0 10px; }
+  /* 画质按钮要跟着一起，否则和两侧图标高矮不齐 */
+  .quality-btn { height: 44px; padding: 0 10px; }
 
   /* ---------- 主体：画面在上，摄像机条在下 ---------- */
   .app {
@@ -1311,8 +1313,8 @@ body.wall .wall-exit { display: grid; }
     border-radius: 2px;
     background: var(--line-2);
   }
-  .modal-close { top: 16px; right: 14px; width: 34px; height: 34px; border-radius: 10px; }
-  .drawer-head { padding-right: 42px; }
+  .modal-close { top: 16px; right: 14px; width: 44px; height: 44px; border-radius: 10px; }
+  .drawer-head { padding-right: 52px; }
   .drawer-head h2 { font-size: 20px; }
   .drawer-body { margin-top: 16px; }
   /* 抽屉内部自己滚，别把滚动传给背后的页面；底部多留一截，最后一行不会卡在屏幕边缘 */

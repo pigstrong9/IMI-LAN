@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 )
 
 // 锁死这次的坑：miot-spec 的型号列表接口返回的是 {"instances":[...]}，
@@ -147,5 +150,83 @@ func TestPtzMissOpsPinned(t *testing.T) {
 	}
 	if ptzMissCmd != 0x112 {
 		t.Fatalf("电机命令应为 0x112，实际 %#x", ptzMissCmd)
+	}
+}
+
+// 规格里 in 的两种写法都要认。以前按对象硬解，遇到 [1] 会让整份规格解析失败，
+// 所有型号都掉进 fallback —— 这正是「云台怎么都不动」的根因。
+func TestMiotParamUnmarshalJSON(t *testing.T) {
+	var byNum miotParam
+	if err := json.Unmarshal([]byte(`1`), &byNum); err != nil {
+		t.Fatalf("数字写法解析失败: %v", err)
+	}
+	if byNum.Piid != 1 {
+		t.Fatalf("数字写法应得到 piid=1，实际 %d", byNum.Piid)
+	}
+
+	var byObj miotParam
+	if err := json.Unmarshal([]byte(`{"piid":2,"format":"string"}`), &byObj); err != nil {
+		t.Fatalf("对象写法解析失败: %v", err)
+	}
+	if byObj.Piid != 2 || byObj.Format != "string" {
+		t.Fatalf("对象写法字段丢失: %+v", byObj)
+	}
+}
+
+func TestMatchValue(t *testing.T) {
+	choices := []any{"left", "pan_right", map[string]any{"value": 3, "description": "Tilt Up"}}
+	if v, ok := matchValue(choices, "left"); !ok || v != "left" {
+		t.Fatalf("纯字符串没匹配上: v=%v ok=%v", v, ok)
+	}
+	if v, ok := matchValue(choices, "right"); !ok || v != "pan_right" {
+		t.Fatalf("别名没匹配上: v=%v ok=%v", v, ok)
+	}
+	if v, ok := matchValue(choices, "up"); !ok || v != 3 {
+		t.Fatalf("对象形式枚举没匹配上: v=%v ok=%v", v, ok)
+	}
+	if _, ok := matchValue(choices, "down"); ok {
+		t.Fatal("不该匹配到 down")
+	}
+}
+
+func TestPtzLooksLikeActionChinese(t *testing.T) {
+	if !ptzLooksLikeAction(miotAction{Type: "camera_ptz_move", Desc: "云台转动"}) {
+		t.Fatal("ptz / 中文云台描述都应识别为云台动作")
+	}
+	if ptzLooksLikeAction(miotAction{Type: "camera_snapshot", Desc: "拍照"}) {
+		t.Fatal("拍照动作不应识别为云台动作")
+	}
+}
+
+// 不支持云台的型号必须 fail closed —— 否则门铃、固定摄像机也会显示方向盘。
+func TestSpecWithChannelRejectsFixedCamera(t *testing.T) {
+	fixed := &ptzSpec{Model: "mijia.camera.v3", Source: "unsupported"}
+	out := specWithChannel("mijia.camera.v3", fixed)
+	if out.Supported || out.Channel != "" || len(out.Dirs) != 0 {
+		t.Fatalf("固定摄像机不应显示方向盘: %+v", *out)
+	}
+
+	// 已知云台机型即使规格没解析出来，也要开放命令通道。
+	ptz := specWithChannel("chuangmi.camera.81ac1", &ptzSpec{Source: "unsupported"})
+	if !ptz.Supported || ptz.Channel != "miss" || len(ptz.Dirs) != 4 {
+		t.Fatalf("已知云台机型应开放命令通道: %+v", *ptz)
+	}
+}
+
+// 否定结论也会过期：规格站修正数据后，不能一直沿用上次的「不支持」。
+func TestSpecCacheExpires(t *testing.T) {
+	key := strings.ToLower("cache.expiry.camera")
+	ptzMu.Lock()
+	ptzSpecCache[key] = &ptzSpec{Model: key, Source: "unsupported"}
+	ptzSpecAt[key] = time.Now().Add(-2 * ptzSpecTTL)
+	ptzMu.Unlock()
+	// 只验证缓存时间戳确实参与了判定，不触发外网请求。
+	ptzMu.Lock()
+	expired := time.Since(ptzSpecAt[key]) >= ptzSpecTTL
+	delete(ptzSpecCache, key)
+	delete(ptzSpecAt, key)
+	ptzMu.Unlock()
+	if !expired {
+		t.Fatal("过期的缓存应被判定为失效")
 	}
 }

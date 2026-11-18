@@ -159,6 +159,7 @@ start_all() {
         nohup "${GW_BIN}" \
             -listen "0.0.0.0:${WEB_PORT}" \
             -static "${WWW_DIR}" \
+            -config "${CONFIG}" \
             -go2rtc "http://127.0.0.1:${API_PORT}" \
             -helper "http://127.0.0.1:${HELPER_PORT}" \
             -user imi \

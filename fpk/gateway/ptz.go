@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,15 @@ var ptzDirAliases = map[string][]string{
 
 // 方向展示顺序：前四个是必需项，斜向只在规格里确实有对应取值时才暴露。
 var ptzDirOrder = []string{"left", "right", "up", "down", "left_up", "right_up", "left_down", "right_down"}
+
+// 已知云台机型。公开规格拿不到（断网 / miot-spec.org 改版）时兜底用，
+// 避免把固定摄像机和门铃也误判成云台机、显示一个按了没反应的方向盘。
+var knownPTZModels = map[string]bool{
+	"chuangmi.camera.81ac1": true, // 小米智能摄像机 C700
+	"chuangmi.camera.12ab1": true, // 创米云台机型
+	"xiaovv.camera.q8":       true, // xiaovv 2K 云台
+	"xiaovv.camera.fjcam3":   true, // xiaovv 母婴看护云台
+}
 
 type ptzSpec struct {
 	Model   string         `json:"model"`
@@ -131,10 +141,14 @@ type miotInstanceDetail struct {
 // 规格解析结果按型号缓存；同一个网关进程只拉一次公开规格表。
 var (
 	ptzMu        sync.Mutex
+	ptzFetchMu   sync.Mutex // 串行化外网解析，避免并发冷请求重复下载同一份规格
 	ptzSpecCache = map[string]*ptzSpec{}
+	ptzSpecAt    = map[string]time.Time{}
 	miotIndex    map[string]string
 	miotIndexAt  time.Time
 )
+
+const ptzSpecTTL = 24 * time.Hour
 
 func httpBytes(rawurl string) ([]byte, error) {
 	req, err := http.NewRequest("GET", rawurl, nil)
@@ -251,15 +265,30 @@ func pickPtzAction(svc miotService) (miotAction, int) {
 }
 
 func matchValue(values []any, dir string) (any, bool) {
+	// 规格里的说法不统一："tilt_up" / "Tilt Up" / "tilt-up" 都表示上。
+	norm := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		s = strings.ReplaceAll(s, " ", "_")
+		return strings.ReplaceAll(s, "-", "_")
+	}
 	alts := ptzDirAliases[dir]
 	for _, alt := range alts {
+		alt = norm(alt)
 		for _, v := range values {
-			s, ok := v.(string)
-			if !ok {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(s), alt) {
-				return s, true
+			switch x := v.(type) {
+			case string:
+				if norm(x) == alt {
+					return x, true
+				}
+			case map[string]any:
+				// 数字枚举常写成 {"value":1,"description":"left"}，
+				// 只认纯字符串会把这类规格整段漏掉。
+				for _, key := range []string{"description", "desc", "name"} {
+					s, _ := x[key].(string)
+					if norm(s) == alt {
+						return x["value"], true
+					}
+				}
 			}
 		}
 	}
@@ -270,7 +299,19 @@ func matchValue(values []any, dir string) (any, bool) {
 func resolvePtzSpec(model string) *ptzSpec {
 	key := strings.ToLower(model)
 	ptzMu.Lock()
-	if sp, ok := ptzSpecCache[key]; ok {
+	sp, ok := ptzSpecCache[key]
+	if ok && time.Since(ptzSpecAt[key]) < ptzSpecTTL {
+		ptzMu.Unlock()
+		return sp
+	}
+	ptzMu.Unlock()
+
+	// 解析过程会联网，串行化避免同一型号被并发请求下载多次。
+	ptzFetchMu.Lock()
+	defer ptzFetchMu.Unlock()
+	ptzMu.Lock()
+	sp, ok = ptzSpecCache[key]
+	if ok && time.Since(ptzSpecAt[key]) < ptzSpecTTL {
 		ptzMu.Unlock()
 		return sp
 	}
@@ -301,8 +342,10 @@ func resolvePtzSpec(model string) *ptzSpec {
 					for _, svc := range detail.Services {
 						for _, p := range svc.Properties {
 							t := strings.ToLower(p.Type + " " + p.Desc)
-							if strings.Contains(t, "ptz") {
-								spec.PTZCapable = true
+							for _, kw := range []string{"ptz", "pan", "tilt", "motor", "云台", "转动", "转向"} {
+								if strings.Contains(t, kw) {
+									spec.PTZCapable = true
+								}
 							}
 						}
 					}
@@ -363,6 +406,7 @@ func resolvePtzSpec(model string) *ptzSpec {
 
 	ptzMu.Lock()
 	ptzSpecCache[key] = spec
+	ptzSpecAt[key] = time.Now()
 	ptzMu.Unlock()
 	return spec
 }
@@ -442,7 +486,10 @@ func (s *qrService) missCommand(src string, cmd uint32, data string) (string, er
 	}
 	defer res.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<16))
+	body, readErr := io.ReadAll(io.LimitReader(res.Body, 1<<16))
+	if readErr != nil {
+		return "", fmt.Errorf("读取播放引擎响应失败：%v", readErr)
+	}
 
 	switch res.StatusCode {
 	case http.StatusOK:
@@ -487,18 +534,42 @@ func specWithChannel(model string, spec *ptzSpec) *ptzSpec {
 	}
 
 	// 规格里没有云台动作 —— 这正是这批摄像机的常态，改走视频连接里的命令通道。
+	// 但只能在「确实是云台机」时才开放：固定摄像机 / 门铃显示一个按了没反应的
+	// 方向盘比不显示更糟，README 也承诺不支持的型号不出现方向盘。
+	capable := out.PTZCapable || knownPTZModels[strings.ToLower(model)]
+	if !capable && model != "" {
+		out.Supported = false
+		out.Channel = ""
+		out.Dirs = nil
+		out.DirVals = nil
+		out.Note = "该型号没有可识别的云台能力，不显示方向盘"
+		return &out
+	}
+	// 型号查不到时（离线 / 未登录）仍然开放命令通道：
+	// 用户已经打开了这台画面，允许他试一次，画面不动就是不是云台机。
 	out.Channel = "miss"
 	out.Supported = true
 	out.Source = "miss"
 	out.Action = "MISS 0x112 motor"
 	out.Dirs = ptzMissDirs
 	out.DirVals = nil
-	if out.PTZCapable {
-		out.Note = "该型号是云台机，转动命令走视频连接里的命令通道"
-	} else {
-		out.Note = "转动命令已发给摄像机；画面不动说明这台不是云台机，或者已经到角度极限"
-	}
+	out.Note = "转动命令走视频连接里的命令通道；画面不动说明这台不是云台机或已到角度极限"
 	return &out
+}
+
+// firstAccount 稳定地选一个已登录账号（map 遍历顺序是随机的，多账号时
+// 每次请求挑到不同账号会让问题难以复现）。
+func (s *qrService) firstAccount() string {
+	tokens := s.readXiaomiTokens()
+	keys := make([]string, 0, len(tokens))
+	for k := range tokens {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
 }
 
 func (s *qrService) registerPTZ(mux *http.ServeMux) {
@@ -516,10 +587,7 @@ func (s *qrService) registerPTZ(mux *http.ServeMux) {
 		}
 		user := r.URL.Query().Get("id")
 		if user == "" {
-			for k := range s.readXiaomiTokens() {
-				user = k
-				break
-			}
+			user = s.firstAccount()
 		}
 
 		// 型号只用来把说明写准一点，查不到也不影响走命令通道
@@ -554,10 +622,7 @@ func (s *qrService) registerPTZ(mux *http.ServeMux) {
 		}
 		user := q.Get("id")
 		if user == "" {
-			for k := range s.readXiaomiTokens() {
-				user = k
-				break
-			}
+			user = s.firstAccount()
 		}
 		if move == "" {
 			s.sendJSON(w, r, 400, map[string]any{"ok": false, "error": "缺少 move"})
@@ -608,16 +673,19 @@ func (s *qrService) registerPTZ(mux *http.ServeMux) {
 		}
 
 		siid, aiid, piid := cloudSpec.Siid, cloudSpec.Aiid, cloudSpec.Piid
-		// 显式带参数时放行，方便换型号手动试
-		if v := q.Get("siid"); v != "" {
-			fmt.Sscanf(v, "%d", &siid)
+		// 显式带参数时放行，方便换型号手动试；写坏了就保持规格里的值，
+		// 不能让 siid=abc 静默把参数清零。
+		parseOverride := func(key string, dst *int) {
+			if v := q.Get(key); v != "" {
+				var n int
+				if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
+					*dst = n
+				}
+			}
 		}
-		if v := q.Get("aiid"); v != "" {
-			fmt.Sscanf(v, "%d", &aiid)
-		}
-		if v := q.Get("piid"); v != "" {
-			fmt.Sscanf(v, "%d", &piid)
-		}
+		parseOverride("siid", &siid)
+		parseOverride("aiid", &aiid)
+		parseOverride("piid", &piid)
 
 		var value any
 		if raw := q.Get("value"); raw != "" {

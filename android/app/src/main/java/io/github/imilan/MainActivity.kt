@@ -197,7 +197,7 @@ class MainActivity : Activity() {
     private fun setupWebView() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         // 底色跟着当前主题走，否则浅色模式下网页加载瞬间会闪一块深蓝
-        web.setBackgroundColor(Color.parseColor(if (isNightMode()) "#0E1726" else "#EDF2F7"))
+        web.setBackgroundColor(Color.parseColor(if (isNightMode()) "#071018" else "#EDF2F7"))
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -345,10 +345,14 @@ class MainActivity : Activity() {
             window.insetsController?.show(WindowInsets.Type.systemBars())
         } else {
             @Suppress("DEPRECATION")
+            // 退出全屏时不能把浅色状态栏图标的 flag 一起冲掉，
+            // 否则 Android 6-10 上亮色主题会变成白底白图标。
+            val light = if (!isNightMode()) View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR else 0
             window.decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                     or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    or light
                 )
         }
     }

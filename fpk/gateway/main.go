@@ -171,7 +171,7 @@ func main() {
 		appToken   = flag.String("app-token", "", "require this token in the imi_app cookie or X-IMI-Token header (app mode)")
 		instanceID = flag.String("instance-id", "", "echo this id from /__imi/health so the app can tell its own gateway apart")
 		enableQR   = flag.Bool("qr", false, "serve built-in QR login instead of proxying to the node helper")
-		configPath = flag.String("config", "", "go2rtc.yaml path (required with -qr)")
+		configPath = flag.String("config", "", "go2rtc.yaml path (required with -qr; enables PTZ otherwise)")
 		logDir     = flag.String("log-dir", "", "directory for qr-login.log (default: next to -config)")
 	)
 	flag.Parse()
@@ -233,18 +233,32 @@ func main() {
 	})
 	mux.Handle("/api", go2rtcProxy)
 	mux.Handle("/api/", go2rtcProxy)
+	var qr *qrService
 	if *enableQR {
 		qrLog := *logDir
 		if qrLog == "" {
 			qrLog = filepath.Dir(*configPath)
 		}
-		qr := newQRService(*configPath, *go2rtcAddr, *go2rtcUser, *go2rtcPass, filepath.Join(qrLog, "qr-login.log"))
+		qr = newQRService(*configPath, *go2rtcAddr, *go2rtcUser, *go2rtcPass, filepath.Join(qrLog, "qr-login.log"))
 		qr.register(mux)
-		qr.registerPTZ(mux)
 	} else {
 		mux.Handle("/qr", helperProxy)
 		mux.Handle("/qr/", helperProxy)
 		mux.Handle("/rooms", helperProxy)
+	}
+
+	// 云台不依赖内置扫码服务：fnOS / 代理模式下扫码由外部 helper 完成，
+	// 令牌同样写在 go2rtc.yaml 里。给网关传 -config 后就能注册 /ptz 路由，
+	// 否则前端探测 /ptz/spec 得到 404、方向盘不会出现（功能静默丢失）。
+	if *configPath != "" {
+		if qr == nil {
+			qrLog := *logDir
+			if qrLog == "" {
+				qrLog = filepath.Dir(*configPath)
+			}
+			qr = newQRService(*configPath, *go2rtcAddr, *go2rtcUser, *go2rtcPass, filepath.Join(qrLog, "qr-login.log"))
+		}
+		qr.registerPTZ(mux)
 	}
 	mux.Handle("/", staticHandler)
 

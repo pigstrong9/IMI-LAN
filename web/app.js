@@ -659,7 +659,7 @@ function renderRooms() {
   const scopeAll = state.settings.scope === 'all';
   const activeRoom = scopeAll ? '' : roomLabel(state.settings.single || '');
 
-  const sig = names.map(n => n + ':' + (cameraOnline(n) ? 1 : 0)).join('|')
+  const sig = names.map(n => n + ':' + roomLabel(n) + ':' + (cameraOnline(n) ? 1 : 0)).join('|')
     + '#' + scopeAll + '#' + activeRoom;
   if (sig === roomsSig) {
     updateOnlineStatus();
@@ -3769,8 +3769,8 @@ async function init() {
 /* 云台（PTZ）                                                          */
 /* ------------------------------------------------------------------ */
 
-// 只在与网关同源时可用：APK / fnOS 版网关以 -qr 启动，才会注册 /ptz。
-// 桌面版和 NAS 代理模式下 /ptz/spec 返回 404，方向盘自动不出现。
+// /ptz 由网关注册：APK 用 -qr、fnOS / 代理模式传 -config 后都可用。
+// 没有网关的桌面版 /ptz/spec 返回 404，方向盘自动不出现。
 const ptz = {
   name: '',        // go2rtc 的流名，命令靠它定位到哪台摄像机
   did: '',
@@ -3778,6 +3778,8 @@ const ptz = {
   model: '',
   channel: '',     // miss = 视频连接里的命令通道；cloud = MIoT 云端
   note: '',
+  moving: false,     // 是否还有未停下来的移动（和按钮 .on 类无关）
+  movePromise: null, // 最近一条 move 请求；stop 必须排在它后面
   probing: 0,
   pressTimer: 0,
   repeatTimer: 0,
@@ -3823,20 +3825,34 @@ function ptzStepMs() {
 // 让电机停下来。切画面、收起方向盘、松手都要走这里。
 function ptzSendStop(name) {
   const target = name || ptz.name;
-  if (!target || ptz.channel !== 'miss') return;
-  const q = new URLSearchParams({ name: target, move: 'stop', region: state.region || 'cn' });
-  if (ptz.did) q.set('did', ptz.did);
-  if (state.user) q.set('id', state.user);
-  // 不 await：这是收尾动作，失败也不该阻塞切画面
-  fetch('/ptz?' + q.toString(), { cache: 'no-store', keepalive: true }).catch(() => {});
+  if (!target || ptz.channel !== 'miss') return Promise.resolve();
+  const send = () => {
+    const q = new URLSearchParams({ name: target, move: 'stop', region: state.region || 'cn' });
+    if (ptz.did) q.set('did', ptz.did);
+    if (state.user) q.set('id', state.user);
+    return fetch('/ptz?' + q.toString(), { cache: 'no-store', keepalive: true }).catch(() => {});
+  };
+  // 慢响应时 stop 不能跑到 move 前面，否则网关先停后转，电机还是不停。
+  const prev = ptz.movePromise || Promise.resolve();
+  ptz.movePromise = null;
+  return prev.then(send, send);
 }
 
 function ptzReset() {
+  ptz.probing++;
+  // 松手时 stop() 已经移除了 .on、并可能把真正的停止命令放在定时器里。
+  // 关画面 / 切摄像头时必须把这笔「欠着的停止」立刻兑现，否则电机会一直转。
+  if (ptz.stopTimer) {
+    clearTimeout(ptz.stopTimer);
+    ptz.stopTimer = 0;
+    ptzSendStop();
+  } else if (ptz.moving) {
+    ptzSendStop();
+  }
+  ptz.moving = false;
+  ptz.movePromise = null;
   clearTimeout(ptz.stopTimer);
   ptz.stopTimer = 0;
-  const wasOn = $$('.ptz-btn.on', $('#ptzPad')).length > 0;
-  if (wasOn) ptzSendStop();
-  ptz.probing++;
   ptz.name = '';
   ptz.did = '';
   ptz.dirs = [];
@@ -3861,14 +3877,13 @@ function ptzRender() {
   toggle.hidden = !supported || !collapsed;
   // 方向盘压着底部提示条：挂个标记让 toast 抬到它上方（见 body.ptz-on）
   document.body.classList.toggle('ptz-on', !pad.hidden);
+  pad.title = ptz.note || '';
   if (!supported) return;
   // 斜向不是所有型号都有对应取值，规格里没有的直接不显示
   $$('.ptz-btn', pad).forEach(btn => {
     btn.hidden = !ptz.dirs.includes(btn.dataset.move);
   });
 }
-
-const ptzWarned = new Set();   // 同一型号只提示一次，别反复弹
 
 // 规格要联网问 miot-spec.org，同一台反复进出单画面没必要重查
 const ptzSpecCache = new Map();      // key -> { at, data }
@@ -3943,20 +3958,24 @@ async function ptzMove(dir) {
   if (ptz.did) q.set('did', ptz.did);
   if (state.user) q.set('id', state.user);
   pad?.classList.add('busy');
-  try {
-    const res = await fetch('/ptz?' + q.toString(), { cache: 'no-store' });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-    haptic(8);
-  } catch (e) {
-    // 长按会连续发指令，失败只提示一次，避免刷屏
-    if (Date.now() - ptz.lastErrorAt > 4000) {
-      ptz.lastErrorAt = Date.now();
-      toast(ptzErrText(e.message), true);
+  const task = (async () => {
+    try {
+      const res = await fetch('/ptz?' + q.toString(), { cache: 'no-store' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      haptic(8);
+    } catch (e) {
+      // 长按会连续发指令，失败只提示一次，避免刷屏
+      if (Date.now() - ptz.lastErrorAt > 4000) {
+        ptz.lastErrorAt = Date.now();
+        toast(ptzErrText(e.message), true);
+      }
+    } finally {
+      pad?.classList.remove('busy');
     }
-  } finally {
-    pad?.classList.remove('busy');
-  }
+  })();
+  ptz.movePromise = task;
+  return task;
 }
 
 function ptzBind() {
@@ -3969,12 +3988,13 @@ function ptzBind() {
   // 「持续朝该方向转」，不补停止会一路转到限位。
   // immediate：15 秒兜底、切后台这种必须马上停；松手则留出步长余量
   const stop = (immediate) => {
-    const had = $$('.ptz-btn.on', pad).length > 0;
+    const had = ptz.moving;
     clearTimeout(ptz.pressTimer);
     clearInterval(ptz.repeatTimer);
     clearTimeout(ptz.holdTimer);
     ptz.pressTimer = ptz.repeatTimer = ptz.holdTimer = 0;
     $$('.ptz-btn.on', pad).forEach(b => b.classList.remove('on'));
+    ptz.moving = false;
     if (!had) return;
     clearTimeout(ptz.stopTimer);
     ptz.stopTimer = 0;
@@ -4004,6 +4024,7 @@ function ptzBind() {
     clearTimeout(ptz.holdTimer);
 
     btn.classList.add('on');
+    ptz.moving = true;
     haptic(10);
     ptzMove(dir);
 
