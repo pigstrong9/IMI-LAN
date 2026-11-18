@@ -58,8 +58,9 @@ var ptzDirOrder = []string{"left", "right", "up", "down", "left_up", "right_up",
 // 已知云台机型。公开规格拿不到（断网 / miot-spec.org 改版）时兜底用，
 // 避免把固定摄像机和门铃也误判成云台机、显示一个按了没反应的方向盘。
 var knownPTZModels = map[string]bool{
-	"chuangmi.camera.81ac1": true, // 小米智能摄像机 C700
-	"chuangmi.camera.12ab1": true, // 创米云台机型
+	"chuangmi.camera.061a01": true, // 小米智能摄像机 3 Pro 云台版
+	"chuangmi.camera.81ac1":  true, // 小米智能摄像机 C700
+	"chuangmi.camera.12ab1":  true, // 创米云台机型
 	"xiaovv.camera.q8":       true, // xiaovv 2K 云台
 	"xiaovv.camera.fjcam3":   true, // xiaovv 母婴看护云台
 }

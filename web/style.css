@@ -131,6 +131,8 @@ svg.ic { flex: none; }
 }
 .icon-btn:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
 .icon-btn.on { color: var(--blue); }
+/* 作者样式里的 display:grid 会盖过 hidden 属性的 UA 规则，必须显式关掉 */
+.icon-btn[hidden] { display: none; }
 .icon-btn .ic { width: 17px; height: 17px; }
 
 .layout-wrap { position: relative; flex: none; }
@@ -758,6 +760,8 @@ body.wall .grid { grid-template-rows: none !important; }
 .viewer-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 10px; background: rgba(7, 12, 19, 0.58); backdrop-filter: blur(10px); }
 .viewer-actions .icon-btn { color: rgba(255, 255, 255, 0.82); }
 .viewer-actions .icon-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: transparent; color: #fff; }
+/* 工具栏的开关态（云台）：深色玻璃上给蓝色底，和普通 hover 区分开 */
+.viewer-actions .icon-btn.on { background: color-mix(in srgb, var(--blue) 34%, transparent); border-color: transparent; color: #fff; }
 .quality-btn {
   /* 和两侧的 .icon-btn 同高同圆角，否则并排时高矮不齐很明显 */
   height: 32px; padding: 0 10px;
@@ -1354,6 +1358,10 @@ body.wall .wall-exit { display: grid; }
     padding: 4px;
     border-radius: 14px;
   }
+  /* 工具栏有 8 个按钮，360px 宽放不下 8 个定宽 44px：图标钮均分剩余宽度，
+     高度仍是 44px 的触控高度；「画质」按内容宽度 */
+  .viewer-actions .icon-btn { flex: 1 1 0; width: auto; min-width: 0; }
+  .viewer-actions .quality-btn { flex: 0 0 auto; }
   .viewer-bottom {
     padding: 22px calc(12px + env(safe-area-inset-right, 0px))
              calc(12px + var(--safe-b)) calc(12px + env(safe-area-inset-left, 0px));
@@ -1622,26 +1630,6 @@ body.wall .wall-exit { display: grid; }
   background: var(--blue-2);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 30%, transparent);
 }
-.ptz-toggle {
-  position: absolute;
-  left: 18px;
-  bottom: 74px;
-  z-index: 4;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 17px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(7, 12, 19, 0.72);
-  color: #eef4fb;
-  font-size: 11px;
-  backdrop-filter: blur(14px);
-}
-.ptz-toggle[hidden] { display: none; }
-.ptz-toggle .ic { width: 13px; height: 13px; opacity: 0.8; }
-
 @media (max-width: 600px) {
   .ptz-pad {
     left: calc(var(--m-pad) + 2px);
@@ -1658,16 +1646,6 @@ body.wall .wall-exit { display: grid; }
   .viewer-slow-card { padding: 20px 16px 16px; }
   .viewer-slow-actions button { height: var(--m-touch); }
   .ptz-btn .ic { width: 17px; height: 17px; }
-  .ptz-toggle {
-    left: calc(var(--m-pad) + 2px);
-    bottom: calc(64px + var(--safe-b));
-    height: var(--m-touch);
-    padding: 0 14px;
-    border-radius: 22px;
-    font-size: 12px;
-    backdrop-filter: none;
-    background-color: rgba(7, 12, 19, 0.78);
-  }
 }
 
 /* ---------- 设置项说明文字 ---------- */

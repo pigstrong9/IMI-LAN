@@ -41,10 +41,10 @@ index 984c73e..3aa6ff2 100644
  	for _, prod := range s.producers {
 diff --git a/internal/xiaomi/ptz_test.go b/internal/xiaomi/ptz_test.go
 new file mode 100644
-index 0000000..f6c188d
+index 0000000..400530e
 --- /dev/null
 +++ b/internal/xiaomi/ptz_test.go
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,44 @@
 +package xiaomi
 +
 +import "testing"
@@ -55,6 +55,7 @@ index 0000000..f6c188d
 +	for _, model := range []string{
 +		"chuangmi.camera.029a02",
 +		"chuangmi.camera.039c01",
++		"chuangmi.camera.061a01",
 +		"chuangmi.camera.81ac1",
 +		"chuangmi.camera.12ab1",
 +		"xiaovv.camera.q8",
@@ -89,7 +90,7 @@ index 0000000..f6c188d
 +	}
 +}
 diff --git a/internal/xiaomi/xiaomi.go b/internal/xiaomi/xiaomi.go
-index 957c9d7..2d8a699 100644
+index 957c9d7..0cd9813 100644
 --- a/internal/xiaomi/xiaomi.go
 +++ b/internal/xiaomi/xiaomi.go
 @@ -8,6 +8,7 @@ import (
@@ -100,7 +101,7 @@ index 957c9d7..2d8a699 100644
  	"strings"
  	"sync"
  
-@@ -51,6 +52,254 @@ func Init() {
+@@ -51,6 +52,255 @@ func Init() {
  	})
  
  	api.HandleFunc("api/xiaomi", apiXiaomi)
@@ -194,6 +195,7 @@ index 957c9d7..2d8a699 100644
 +var ptzModels = map[string]bool{
 +	"chuangmi.camera.029a02": true, // 米家 360° 2K 云台版
 +	"chuangmi.camera.039c01": true, // 小米智能摄像机 2 云台版
++	"chuangmi.camera.061a01": true, // 小米智能摄像机 3 Pro 云台版
 +	"chuangmi.camera.81ac1":  true, // 小米智能摄像机 C700
 +	"chuangmi.camera.12ab1":  true, // 创米云台机型
 +	"xiaovv.camera.q8":       true, // xiaovv 2K 云台

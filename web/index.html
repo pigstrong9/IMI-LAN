@@ -154,6 +154,11 @@ try {
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <!-- 云台方向三角：默认朝上，靠 CSS 按 data-move 旋转 -->
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 5l6.5 9h-13z" fill="currentColor"/></symbol>
+  <!-- 云台开关：四向箭头 -->
+  <symbol id="i-ptz" viewBox="0 0 24 24">
+    <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M12 5l-2.2 2.2M12 5l2.2 2.2M12 19l-2.2-2.2M12 19l2.2-2.2M5 12l2.2-2.2M5 12l2.2 2.2M19 12l-2.2-2.2M19 12l-2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
@@ -269,6 +274,8 @@ try {
       <button class="icon-btn" id="btnViewerRec" title="录制" aria-label="录制"><svg class="ic"><use href="#i-record"/></svg></button>
       <button class="icon-btn" id="btnViewerPip" title="画中画" aria-label="画中画"><svg class="ic"><use href="#i-pip"/></svg></button>
       <button class="icon-btn" id="btnViewerZoom" title="缩放/平移" aria-label="缩放/平移"><svg class="ic"><use href="#i-zoom"/></svg></button>
+      <!-- 云台开关：支持云台的型号才出现，默认关闭（不显示方向盘） -->
+      <button class="icon-btn" id="btnViewerPtz" title="云台控制" aria-label="云台控制" aria-pressed="false" hidden><svg class="ic"><use href="#i-ptz"/></svg></button>
       <button class="quality-btn" id="btnViewerQuality" title="画质">画质</button>
       <button class="icon-btn" id="btnViewerClose" title="关闭" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
     </div>
@@ -279,7 +286,7 @@ try {
     <button data-q="sd">流畅</button>
   </div>
 
-  <!-- 云台方向盘：只在 /ptz/spec 报告该型号支持云台时出现 -->
+  <!-- 云台方向盘：型号支持云台、且用户在工具栏打开后才出现 -->
   <div class="ptz-pad" id="ptzPad" hidden aria-label="云台方向键">
     <button class="ptz-btn" data-move="left_up" aria-label="左上"><svg class="ic"><use href="#i-arrow"/></svg></button>
     <button class="ptz-btn" data-move="up" aria-label="上"><svg class="ic"><use href="#i-arrow"/></svg></button>
@@ -291,9 +298,6 @@ try {
     <button class="ptz-btn" data-move="down" aria-label="下"><svg class="ic"><use href="#i-arrow"/></svg></button>
     <button class="ptz-btn" data-move="right_down" aria-label="右下"><svg class="ic"><use href="#i-arrow"/></svg></button>
   </div>
-  <button class="ptz-toggle" id="ptzToggle" hidden aria-label="显示云台方向键">
-    <svg class="ic"><use href="#i-camera"/></svg><span>云台</span>
-  </button>
 
   <!-- 首帧跑不出来时给具体建议，而不是让用户对着黑屏等 -->
   <div class="viewer-slow" id="viewerSlow" hidden>

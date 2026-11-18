@@ -24,7 +24,7 @@
 | --- | --- |
 | `chuangmi.camera.029a02` | 米家 360° 2K 云台版 |
 | `chuangmi.camera.039c01` | 小米智能摄像机 2 云台版 |
-| `chuangmi.camera.061a01` | 小米智能摄像机 C500 系列 |
+| `chuangmi.camera.061a01` | 小米智能摄像机 3 Pro 云台版（可转） |
 | `madv.cateye.mi3iot` | 小米智能门铃 3（电池设备，可能休眠） |
 | `mijia.camera.v3` | 米家智能摄像机 1080P（走 TUTK，可能较慢） |
 | `chuangmi.camera.81ac1` | 小米智能摄像机 C700（云台，可转） |
@@ -182,8 +182,10 @@ python android/build.py --abi arm64-v8a
 
 ## 云台控制
 
-单画面查看时，画面左下会出现方向盘。它不走小米云端，而是复用视频连接里的命令通道
-（`miss` 的 `cmdMotorReq = 0x112`），因此和看视频一样只走局域网。
+单画面查看时，右上角工具栏里有「云台控制」开关（四向箭头图标）。**默认关闭**，点一下才会在
+左下角显示方向盘；再点一次收起。不是云台机时这个开关本身不会出现。
+它不走小米云端，而是复用视频连接里的命令通道（`miss` 的 `cmdMotorReq = 0x112`），
+因此和看视频一样只走局域网。
 
 几个约定：
 
@@ -199,9 +201,10 @@ python android/build.py --abi arm64-v8a
 - **平台支持**：安卓版、fnOS / NAS 版走网关（需要带 `-config` 指向 go2rtc.yaml，安装包已配置好），
   会按型号查公开规格，必要时再走 MIoT 云端兜底；桌面版（Windows / macOS 的 Electron 包）
   不经过网关，由打了 `xiaomi-control` 补丁的 go2rtc 直接提供 `/ptz` 与 `/ptz/spec`。
-- **桌面版按白名单 fail-closed**：只从流地址的 `model=` 识别已知云台机型（C700、创米云台、
-  xiaovv 云台等，名单见 `fpk/patches/xiaomi-control.patch`）。型号为空或未收录时方向盘
-  不会出现，固定机 / 门铃也不会出现「按了没反应」的方向盘。桌面版不接 MIoT 云端兜底，
+- **桌面版按白名单 fail-closed**：只从流地址的 `model=` 识别已知云台机型（米家 360°、
+  小米 2/3 Pro 云台版、C700、创米云台、xiaovv 云台等，名单见
+  `fpk/patches/xiaomi-control.patch`）。型号为空或未收录时开关和方向盘都不会出现，
+  固定机 / 门铃也不会出现「按了没反应」的方向盘。桌面版不接 MIoT 云端兜底，
   主路径就是局域网 MISS 命令。
 
 > 顺带修掉了一个一直在的问题：命令通道登录之后如果没人读，`cs2` 的接收缓冲（10 条）

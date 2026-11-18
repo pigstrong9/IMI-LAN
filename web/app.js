@@ -3779,6 +3779,7 @@ const ptz = {
   model: '',
   channel: '',     // miss = 视频连接里的命令通道；cloud = MIoT 云端
   note: '',
+  open: false,     // 方向盘是否已由工具栏打开；每次进画面都从关闭开始
   moving: false,     // 是否还有未停下来的移动（和按钮 .on 类无关）
   movePromise: null, // 最近一条 move 请求；stop 必须排在它后面
   probing: 0,
@@ -3860,6 +3861,7 @@ function ptzReset() {
   ptz.model = '';
   ptz.channel = '';
   ptz.note = '';
+  ptz.open = false;
   clearTimeout(ptz.pressTimer);
   clearInterval(ptz.repeatTimer);
   clearTimeout(ptz.holdTimer);
@@ -3869,20 +3871,27 @@ function ptzReset() {
 
 function ptzRender() {
   const pad = $('#ptzPad');
-  const toggle = $('#ptzToggle');
-  if (!pad || !toggle) return;
+  const button = $('#btnViewerPtz');
+  if (!pad || !button) return;
   const supported = ptz.dirs.length >= 4;
-  const key = ptz.did || ptz.name;
-  const collapsed = supported && key && state.settings.ptzHidden === key;
-  pad.hidden = !supported || collapsed;
-  toggle.hidden = !supported || !collapsed;
+  const open = supported && ptz.open;
+  // 工具栏开关：只有云台机才出现；默认关闭，方向盘要用户点了才显示
+  button.hidden = !supported;
+  button.classList.toggle('on', open);
+  button.setAttribute('aria-pressed', String(open));
+  if (supported) {
+    const label = open ? '收起云台方向键' : '打开云台方向键';
+    button.title = ptz.note ? `${label}（${ptz.note}）` : label;
+    button.setAttribute('aria-label', label);
+  }
+  pad.hidden = !open;
   // 方向盘压着底部提示条：挂个标记让 toast 抬到它上方（见 body.ptz-on）
-  document.body.classList.toggle('ptz-on', !pad.hidden);
+  document.body.classList.toggle('ptz-on', open);
   pad.title = ptz.note || '';
   if (!supported) return;
   // 斜向不是所有型号都有对应取值，规格里没有的直接不显示
-  $$('.ptz-btn', pad).forEach(btn => {
-    btn.hidden = !ptz.dirs.includes(btn.dataset.move);
+  $$('.ptz-btn', pad).forEach(dir => {
+    dir.hidden = !ptz.dirs.includes(dir.dataset.move);
   });
 }
 
@@ -3908,6 +3917,7 @@ async function ptzProbe(name) {
   ptz.model = '';
   ptz.channel = '';
   ptz.note = '';
+  ptz.open = false;   // 每台摄像头进来都先收起方向盘，要用再从工具栏打开
   ptzRender();
   if (!ptz.name) return;
 
@@ -3981,7 +3991,7 @@ async function ptzMove(dir) {
 
 function ptzBind() {
   const pad = $('#ptzPad');
-  const toggle = $('#ptzToggle');
+  const button = $('#btnViewerPtz');
   const collapse = $('#ptzCollapse');
   if (!pad) return;
 
@@ -4045,14 +4055,15 @@ function ptzBind() {
   // 切后台 / 锁屏时收不到 pointerup：不补这一条，电机会一直转到限位
   document.addEventListener('visibilitychange', () => { if (document.hidden) stop(true); });
 
-  toggle?.addEventListener('click', () => {
-    state.settings.ptzHidden = '';
-    saveSettings();
+  button?.addEventListener('click', () => {
+    ptz.open = !ptz.open;
+    // 收起方向盘时如果还有没落地的转动，先立刻停住电机
+    if (!ptz.open) stop(true);
     ptzRender();
   });
   collapse?.addEventListener('click', () => {
-    state.settings.ptzHidden = ptz.did || ptz.name;
-    saveSettings();
+    stop(true);
+    ptz.open = false;
     ptzRender();
   });
 }
