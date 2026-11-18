@@ -596,6 +596,8 @@ body.wall .grid { grid-template-rows: none !important; }
 }
 .tool:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 .tool.on { color: var(--blue-2); }
+/* 和 .icon-btn 一样：display:grid 会盖过 hidden 属性的 UA 规则 */
+.tool[hidden] { display: none; }
 .tool.quality-tool { width: auto; padding: 0 7px; font-family: var(--mono); font-size: 9px; letter-spacing: 0.03em; }
 .tool.quality-tool span { pointer-events: none; }
 .tool.del:hover { color: #ff9aa4; }

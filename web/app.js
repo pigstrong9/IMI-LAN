@@ -985,6 +985,8 @@ async function refreshStreams() {
     state.cards.size,
   ].join('#');
   if (gridSig === lastGridSig) {
+    // 布局没变也要对齐云台状态：从查看器回到 1×1 时卡片开关要重新出现
+    syncCardPtz(single && !state.viewer ? visible[0] || '' : '');
     updateLayoutUI();
     updateSettings();
     renderRooms();
@@ -1001,10 +1003,15 @@ async function refreshStreams() {
   for (const [name, card] of state.cards) {
     if (!visible.includes(name)) {
       if (state.viewer?.name === name) closeViewer();
+      // 方向盘可能临时挂在卡片里，销毁卡片前先移回去，别跟着 DOM 一起被删掉
+      restorePtzPad();
       card.destroy();
       state.cards.delete(name);
     }
   }
+
+  // 1×1 单窗口也支持云台：只探当前这一张，开关长在卡片工具栏里
+  syncCardPtz(single && !state.viewer ? visible[0] || '' : '');
 
   const grid = $('#grid');
   grid.style.setProperty('--grid-cols', String(cols));
@@ -1421,6 +1428,7 @@ function createCard(name, delay = 0) {
         <button class="tool" data-act="hold" title="暂停加载">${icon('i-pause')}</button>
         <button class="tool quality-tool" data-act="quality" title="切换画质"><span data-quality-label>${qualityLabel}</span></button>
         <button class="tool" data-act="zoom" title="缩放/平移">${icon('i-zoom')}</button>
+        <button class="tool ptz-tool" data-act="ptz" title="云台控制" aria-label="云台控制" hidden>${icon('i-ptz')}</button>
         <button class="tool" data-act="open" title="全屏">${icon('i-expand')}</button>
         <button class="tool del" data-act="del" title="删除">${icon('i-trash')}</button>
       </div>
@@ -1771,6 +1779,8 @@ function createCard(name, delay = 0) {
       cycleQuality(name);
     } else if (act === 'zoom') {
       media._zoom?.toggle();
+    } else if (act === 'ptz') {
+      ptzToggle();
     } else if (act === 'resume') {
       resumeStream();
     } else if (act === 'open') {
@@ -1860,6 +1870,7 @@ async function deleteCamera(name, title = name) {
     state.paused.delete(name);
     savePaused();
     if (state.viewer?.name === name) closeViewer();
+    restorePtzPad();
     state.cards.get(name)?.destroy();
     state.cards.delete(name);
     await refreshStreams();
@@ -2137,6 +2148,8 @@ function closeViewer() {
   setRecUI(false);
   clearViewerWatch();
   ptzReset();
+  // 回到 1×1 时把当前卡片的云台能力重新探一遍（开关在卡片工具栏里）
+  if (state.settings.layout === '1x1') syncCardPtz(state.settings.single);
 }
 
 /* ---------------------------------------------------------------- */
@@ -2951,6 +2964,7 @@ async function addSelected() {
       });
 
       // 如果已存在旧 card，先移除，稍后按新配置重建
+      restorePtzPad();
       state.cards.get(name)?.destroy();
       state.cards.delete(name);
 
@@ -3140,6 +3154,7 @@ async function clearCameras() {
     saveMeta();
     state.paused.clear();
     savePaused();
+    restorePtzPad();
     for (const [, card] of state.cards) card.destroy();
     state.cards.clear();
     await refreshStreams();
@@ -3779,7 +3794,10 @@ const ptz = {
   model: '',
   channel: '',     // miss = 视频连接里的命令通道；cloud = MIoT 云端
   note: '',
-  open: false,     // 方向盘是否已由工具栏打开；每次进画面都从关闭开始
+  open: false,     // 方向盘是否已打开；每次进画面都从关闭开始
+  surface: '',     // viewer = 全屏查看器；card = 1×1 单窗口；'' = 都没有
+  home: null,      // 方向盘在查看器里的原始父节点，挪进卡片后要能移回来
+  halt: null,      // ptzBind 注册的「立即停」，卡片工具栏收起时调用
   moving: false,     // 是否还有未停下来的移动（和按钮 .on 类无关）
   movePromise: null, // 最近一条 move 请求；stop 必须排在它后面
   probing: 0,
@@ -3840,8 +3858,9 @@ function ptzSendStop(name) {
   return prev.then(send, send);
 }
 
-function ptzReset() {
-  ptz.probing++;
+// 立刻兑现「欠着的停止」并清掉按键定时器。关画面、收方向盘、切摄像头都要走这里。
+function ptzStopNow() {
+  const pad = $('#ptzPad');
   // 松手时 stop() 已经移除了 .on、并可能把真正的停止命令放在定时器里。
   // 关画面 / 切摄像头时必须把这笔「欠着的停止」立刻兑现，否则电机会一直转。
   if (ptz.stopTimer) {
@@ -3855,6 +3874,51 @@ function ptzReset() {
   ptz.movePromise = null;
   clearTimeout(ptz.stopTimer);
   ptz.stopTimer = 0;
+  clearTimeout(ptz.pressTimer);
+  clearInterval(ptz.repeatTimer);
+  clearTimeout(ptz.holdTimer);
+  ptz.pressTimer = ptz.repeatTimer = ptz.holdTimer = 0;
+  if (pad) $$('.ptz-btn.on', pad).forEach(b => b.classList.remove('on'));
+}
+
+// 方向盘平时属于查看器；1×1 单窗口时临时挪进卡片，切回去要还原。
+function restorePtzPad() {
+  const pad = $('#ptzPad');
+  if (pad && ptz.home && pad.parentNode !== ptz.home) ptz.home.appendChild(pad);
+}
+
+// 方向盘该挂在哪儿：查看器里就放回原位，单窗口卡片里就跟进卡片。
+function ptzMountPad(open) {
+  if (!open) { restorePtzPad(); return; }
+  let host = null;
+  if (ptz.surface === 'card') {
+    const card = state.cards.get(ptz.name)?.el;
+    host = card ? $('.card-media', card) : null;
+  }
+  if (!host) host = ptz.home;
+  const pad = $('#ptzPad');
+  if (pad && host && pad.parentNode !== host) host.appendChild(pad);
+}
+
+// 卡片上的云台按钮：只有当前 1×1 的那台、且后端报告支持云台时才出现
+function ptzCardButton() {
+  if (ptz.surface !== 'card') return null;
+  const card = state.cards.get(ptz.name)?.el;
+  return card ? $('[data-act="ptz"]', card) : null;
+}
+
+// 收起方向盘（工具栏开关或方向盘中心点）。收起前先把没落地的转动停掉。
+function ptzToggle(force) {
+  const next = typeof force === 'boolean' ? force : !ptz.open;
+  if (next === ptz.open) return;
+  ptz.open = next;
+  if (!next) ptz.halt?.(true);
+  ptzRender();
+}
+
+function ptzReset() {
+  ptz.probing++;
+  ptzStopNow();
   ptz.name = '';
   ptz.did = '';
   ptz.dirs = [];
@@ -3862,10 +3926,8 @@ function ptzReset() {
   ptz.channel = '';
   ptz.note = '';
   ptz.open = false;
-  clearTimeout(ptz.pressTimer);
-  clearInterval(ptz.repeatTimer);
-  clearTimeout(ptz.holdTimer);
-  ptz.pressTimer = ptz.repeatTimer = ptz.holdTimer = 0;
+  ptz.surface = '';
+  restorePtzPad();
   ptzRender();
 }
 
@@ -3875,8 +3937,8 @@ function ptzRender() {
   if (!pad || !button) return;
   const supported = ptz.dirs.length >= 4;
   const open = supported && ptz.open;
-  // 工具栏开关：只有云台机才出现；默认关闭，方向盘要用户点了才显示
-  button.hidden = !supported;
+  // 查看器工具栏开关：只有云台机才出现；默认关闭，方向盘要用户点了才显示
+  button.hidden = !supported || ptz.surface !== 'viewer';
   button.classList.toggle('on', open);
   button.setAttribute('aria-pressed', String(open));
   if (supported) {
@@ -3884,7 +3946,24 @@ function ptzRender() {
     button.title = ptz.note ? `${label}（${ptz.note}）` : label;
     button.setAttribute('aria-label', label);
   }
+  // 1×1 单窗口：开关长在卡片工具栏里，逻辑完全一致
+  const cardBtn = ptzCardButton();
+  if (cardBtn) {
+    cardBtn.hidden = !supported;
+    cardBtn.classList.toggle('on', open);
+    cardBtn.setAttribute('aria-pressed', String(open));
+    cardBtn.title = ptz.note ? `云台控制（${ptz.note}）` : '云台控制';
+  } else {
+    // 离开 1×1（进查看器、换多窗口布局）时把卡片上的开关状态清掉，
+    // 否则那张卡会留着一个高亮但已经没有方向盘的按钮
+    $$('.tool.ptz-tool').forEach(el => {
+      el.hidden = true;
+      el.classList.remove('on');
+      el.removeAttribute('aria-pressed');
+    });
+  }
   pad.hidden = !open;
+  ptzMountPad(open);
   // 方向盘压着底部提示条：挂个标记让 toast 抬到它上方（见 body.ptz-on）
   document.body.classList.toggle('ptz-on', open);
   pad.title = ptz.note || '';
@@ -3909,8 +3988,10 @@ function ptzApplySpec(data) {
   ptz.dirs = spec.supported && Array.isArray(spec.dirs) ? spec.dirs : [];
 }
 
-async function ptzProbe(name) {
+async function ptzProbe(name, surface = 'viewer') {
   ptz.probing++;
+  // 换摄像头 / 换界面时，上一台可能还在转，先停住再换
+  ptzStopNow();
   ptz.name = name || '';
   ptz.did = name ? streamDid(name) : '';
   ptz.dirs = [];
@@ -3918,6 +3999,7 @@ async function ptzProbe(name) {
   ptz.channel = '';
   ptz.note = '';
   ptz.open = false;   // 每台摄像头进来都先收起方向盘，要用再从工具栏打开
+  ptz.surface = name ? surface : '';
   ptzRender();
   if (!ptz.name) return;
 
@@ -3943,6 +4025,21 @@ async function ptzProbe(name) {
   } catch {
   }
   if (seq === ptz.probing) ptzRender();
+}
+
+// 1×1 单窗口里，当前这张卡片是不是云台机也要探一次，
+// 否则云台开关只在全屏查看器里才有，单窗口模式下完全看不到。
+let ptzCardName = '';
+
+function syncCardPtz(name) {
+  if (state.viewer) return;             // 全屏查看器有自己的 ptzProbe
+  if (!name) {
+    if (ptzCardName) { ptzCardName = ''; ptzReset(); }
+    return;
+  }
+  if (ptzCardName === name && ptz.surface === 'card') { ptzRender(); return; }
+  ptzCardName = name;
+  ptzProbe(name, 'card');
 }
 
 // 云台失败原因五花八门，直接把后端原文弹出来会是一条带着
@@ -4055,17 +4152,13 @@ function ptzBind() {
   // 切后台 / 锁屏时收不到 pointerup：不补这一条，电机会一直转到限位
   document.addEventListener('visibilitychange', () => { if (document.hidden) stop(true); });
 
-  button?.addEventListener('click', () => {
-    ptz.open = !ptz.open;
-    // 收起方向盘时如果还有没落地的转动，先立刻停住电机
-    if (!ptz.open) stop(true);
-    ptzRender();
-  });
-  collapse?.addEventListener('click', () => {
-    stop(true);
-    ptz.open = false;
-    ptzRender();
-  });
+  // 方向盘会被临时挪进 1×1 的卡片里，记住原始父节点以便归位；
+  // 收起开关在卡片工具栏上，那里也要能立刻停住电机。
+  ptz.home = pad.parentNode;
+  ptz.halt = stop;
+
+  button?.addEventListener('click', () => ptzToggle());
+  collapse?.addEventListener('click', () => ptzToggle(false));
 }
 
 if (document.readyState === 'loading') {
