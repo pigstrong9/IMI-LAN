@@ -585,14 +585,17 @@ func (s *qrService) firstAccount() string {
 	return keys[0]
 }
 
-// accountForDevice 选出这次云台请求该用哪个账号查型号。
+// accountForDevice 选出这次云台请求该用哪个账号查型号，并返回探测时已拿到的型号（没有则空）。
 // 前端正常路径会带 id（state.user），这里处理的是没带 id 的边界：
 // 多账号时按字典序取第一个可能不是设备所属账号，导致型号查不到、提示文案失真。
 // 有 did 时按设备反查所属账号；查不到再退回 firstAccount —— 保持 fail-open，
 // 不返回错误让方向盘消失（命令通道按流名定位，本就不依赖这个账号）。
-func (s *qrService) accountForDevice(requested, region, did string) string {
+//
+// 房间缓存只保留最近一个账号，逐个探测会让每个账号各拉一次房间；返回探测到的
+// 型号给调用方复用，避免同一个账号再查一遍。
+func (s *qrService) accountForDevice(requested, region, did string) (string, string) {
 	if requested != "" {
-		return requested
+		return requested, ""
 	}
 	tokens := s.readXiaomiTokens()
 	keys := make([]string, 0, len(tokens))
@@ -601,19 +604,18 @@ func (s *qrService) accountForDevice(requested, region, did string) string {
 	}
 	sort.Strings(keys)
 	if len(keys) == 0 {
-		return ""
+		return "", ""
 	}
 	if len(keys) == 1 || did == "" {
-		return keys[0]
+		return keys[0], ""
 	}
-	// 多账号：找到房间里确实有这台设备的账号。fetchRooms 自带缓存，
-	// 账号数通常很少，这里的额外查询只在未带 id 的多账号场景发生。
+	// 多账号：找到房间里确实有这台设备的账号。
 	for _, k := range keys {
-		if _, err := s.deviceModelOf(k, region, did); err == nil {
-			return k
+		if m, err := s.deviceModelOf(k, region, did); err == nil {
+			return k, m
 		}
 	}
-	return keys[0]
+	return keys[0], ""
 }
 
 func (s *qrService) registerPTZ(mux *http.ServeMux) {
@@ -629,12 +631,15 @@ func (s *qrService) registerPTZ(mux *http.ServeMux) {
 		if region == "" {
 			region = "cn"
 		}
-		user := s.accountForDevice(r.URL.Query().Get("id"), region, did)
+		user, probedModel := s.accountForDevice(r.URL.Query().Get("id"), region, did)
 
 		// 型号只用来把说明写准一点，查不到也不影响走命令通道
 		var model string
 		var spec *ptzSpec
-		if did != "" {
+		if probedModel != "" {
+			model = probedModel
+			spec = resolvePtzSpec(model)
+		} else if did != "" {
 			if m, err := s.deviceModelOf(user, region, did); err == nil {
 				model = m
 				spec = resolvePtzSpec(model)
@@ -657,19 +662,23 @@ func (s *qrService) registerPTZ(mux *http.ServeMux) {
 		name := strings.TrimSpace(q.Get("name"))
 		did := q.Get("did")
 		move := strings.ToLower(strings.TrimSpace(q.Get("move")))
-		region := q.Get("region")
-		if region == "" {
-			region = "cn"
-		}
-		user := s.accountForDevice(q.Get("id"), region, did)
 		if move == "" {
 			s.sendJSON(w, r, 400, map[string]any{"ok": false, "error": "缺少 move"})
 			return
 		}
+		region := q.Get("region")
+		if region == "" {
+			region = "cn"
+		}
+		// 参数校验之后再选账号：没带 id 的多账号场景，选账号可能触发房间拉取
+		user, probedModel := s.accountForDevice(q.Get("id"), region, did)
 
 		var model string
 		var spec *ptzSpec
-		if did != "" {
+		if probedModel != "" {
+			model = probedModel
+			spec = resolvePtzSpec(model)
+		} else if did != "" {
 			if m, err := s.deviceModelOf(user, region, did); err == nil {
 				model = m
 				spec = resolvePtzSpec(model)

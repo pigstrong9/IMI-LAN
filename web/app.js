@@ -3862,8 +3862,8 @@ function ptzSendStop(name) {
 function ptzStopNow() {
   const pad = $('#ptzPad');
   // 松手时 stop() 已移除 .on、并把真正的停止命令放进 stopTimer；长按中则是 moving。
-  // 两种「欠着的停止」都只补发一次：movePromise 的清空/串行化交给 ptzSendStop 独占，
-  // 这里只负责定时器与视觉状态，避免两处重复清理掩盖发令时序。
+  // 两种「欠着的停止」都只补发一次：定时器与视觉状态在这里清，发令和 movePromise
+  // 的清空交给 ptzSendStop（stop 会排在在途 move 之后；反向不保证，见 ptzMove）。
   const owed = !!ptz.stopTimer || ptz.moving;
   if (ptz.stopTimer) {
     clearTimeout(ptz.stopTimer);
