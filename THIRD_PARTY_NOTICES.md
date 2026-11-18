@@ -9,8 +9,8 @@
 ## go2rtc（MIT）
 
 - 项目：https://github.com/AlexxIT/go2rtc
-- 使用方式：捆绑 `go2rtc.exe`；fnOS 版在构建时下载 1.9.15 源码并应用 `fpk/patches/xiaomi-login.patch`，交叉编译出 Linux 版；`web/video-rtc.js` 来自其 MIT 许可的播放器。
-- 补丁内容：小米登录 `finishAuth` 请求携带 `passToken`/`userId` Cookie，修复 401；登录成功后把轮换的 `passToken` 写回配置，避免引擎重启要求重新扫码；配置写入改为临时文件原子替换并保持 0600；补丁本身同样按 MIT 使用。
+- 使用方式：捆绑 `go2rtc.exe`；fnOS / 安卓 / macOS 桌面版在构建时下载 1.9.15 源码，按顺序应用 `fpk/patches/xiaomi-login.patch` → `fpk/patches/xiaomi-control.patch` 后交叉编译；`web/video-rtc.js` 来自其 MIT 许可的播放器。
+- 补丁内容：小米登录 `finishAuth` 请求携带 `passToken`/`userId` Cookie，修复 401；登录成功后把轮换的 `passToken` 写回配置，避免引擎重启要求重新扫码；配置写入改为临时文件原子替换并保持 0600；MISS 命令通道常驻排空、提供 `POST /api/xiaomi/command`，以及桌面版使用的 `/ptz`、`/ptz/spec` 云台接口。补丁本身同样按 MIT 使用。
 - 版权：Copyright (c) 2022 Alexey Khit
 
 ```

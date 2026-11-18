@@ -14,6 +14,8 @@ const ROOT = app.isPackaged
 const LOG_DIR = app.isPackaged
   ? (IS_MAC ? app.getPath('logs') : path.dirname(process.execPath))
   : __dirname;
+// 桌面版不启动 imi-gateway：网页和云台接口（/ptz、/ptz/spec）都由打了
+// xiaomi-control 补丁的 go2rtc 直接提供，所以引擎必须带补丁重新编译。
 const ENGINE = path.join(ROOT, IS_WIN ? 'go2rtc.exe' : 'go2rtc');
 // .app 包内是只读的、升级时会被整个替换，可写配置必须放到用户目录
 // （Windows 便携版仍是 exe 旁边的 go2rtc.yaml，行为不变）

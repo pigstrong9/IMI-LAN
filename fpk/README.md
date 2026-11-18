@@ -48,7 +48,7 @@ fpk/dist/imi-lan_1.0.2_x86.fpk.sha256
 
 构建脚本做了这些事：
 
-1. 下载固定版本 go2rtc 1.9.15（校验 SHA-256），应用 `fpk/patches/xiaomi-login.patch`；
+1. 下载固定版本 go2rtc 1.9.15（校验 SHA-256），按 `xiaomi-login.patch` → `xiaomi-control.patch` 的顺序应用补丁；
 2. 交叉编译 `linux/amd64` 的 go2rtc 和 `fpk/gateway` 网关；
 3. 把 `web/`、`qr-login.js`、两个二进制、图标和生命周期脚本打进 fpk；
 4. 校验 `app.tgz` 的 MD5、ELF 架构和必要文件。

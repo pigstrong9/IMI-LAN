@@ -35,7 +35,7 @@ python android/build.py --release
 
 脚本会：
 
-1. 复用/生成 `fpk/.build` 里已打补丁的 go2rtc 源码（标记文件记录补丁 sha256，`fpk/patches/xiaomi-login.patch` 改动后会自动重新解包打补丁）；
+1. 复用/生成 `fpk/.build` 里已打补丁的 go2rtc 源码（标记文件记录所有 `fpk/patches/*.patch` 的 sha256，任一补丁改动后会自动重新解包并按顺序打补丁）；
 2. 交叉编译两个 ABI 的引擎与网关，做 ELF 架构校验；
 3. 把 `web/` 复制到 `app/src/main/assets/web`（该目录是构建产物，已在 `.gitignore` 里；`app/build.gradle.kts` 的 `preBuild` 也会同步一次，直接跑 gradle 同样有效）；
 4. 写 `local.properties` 并调用 Gradle（默认先 `clean`，否则增量打包会在 APK 里留下旧填充，体积越滚越大）；

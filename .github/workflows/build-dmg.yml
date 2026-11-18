@@ -47,9 +47,11 @@ jobs:
           cp qr-login.js desktop/vendor/qr-login.js
           cp -R web desktop/vendor/web
 
-          # 引擎与 Windows / fnOS / 安卓同源：下载 go2rtc v1.9.15 源码，打 xiaomi-login 补丁后
-          # 交叉编译成 darwin 两个架构再 lipo 合并。不能用官方 release 二进制——那里面没有补丁，
-          # 读不到扫码保存的 xiaomi-credentials，只能退回老的 passToken 登录（很快会被风控 70016）。
+          # 引擎与 Windows / fnOS / 安卓同源：下载 go2rtc v1.9.15 源码，按顺序打
+          # xiaomi-login → xiaomi-control 两个补丁后交叉编译成 darwin 两个架构再
+          # lipo 合并。不能用官方 release 二进制——那里面没有补丁，读不到扫码保存的
+          # xiaomi-credentials（只能退回老的 passToken 登录，很快会被风控 70016），
+          # 也没有 /api/xiaomi/command 和 /ptz，桌面版云台会失效。
           V=1.9.15
           SRC_SHA256=08901ecc03ec031b1af13268e6e62370ba7f887b30f98866624d683e0486c084
           curl -fsSL --retry 3 -o /tmp/go2rtc-src.tar.gz \
@@ -60,6 +62,7 @@ jobs:
           (
             cd "/tmp/go2rtc-src/go2rtc-${V}"
             git apply -p1 --whitespace=nowarn "${GITHUB_WORKSPACE}/fpk/patches/xiaomi-login.patch"
+            git apply -p1 --whitespace=nowarn "${GITHUB_WORKSPACE}/fpk/patches/xiaomi-control.patch"
             for arch in amd64 arm64; do
               CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" \
                 go build -trimpath -ldflags "-s -w" -o "/tmp/go2rtc-$arch" .
@@ -71,6 +74,10 @@ jobs:
           # 补丁没进去就直接失败，避免又发一个行为不一致的包
           if ! grep -qa 'xiaomi-credentials' desktop/vendor/go2rtc; then
             echo "::error::go2rtc 没有打上 fpk/patches/xiaomi-login.patch"
+            exit 1
+          fi
+          if ! grep -qa 'api/xiaomi/command' desktop/vendor/go2rtc; then
+            echo "::error::go2rtc 没有打上 fpk/patches/xiaomi-control.patch"
             exit 1
           fi
           # 由 assets/icon.png 生成 icns（iconutil 为 macOS 自带工具）

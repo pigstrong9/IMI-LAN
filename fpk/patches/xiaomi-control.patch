@@ -39,8 +39,57 @@ index 984c73e..3aa6ff2 100644
  func (s *Stream) Sources() []string {
  	sources := make([]string, 0, len(s.producers))
  	for _, prod := range s.producers {
+diff --git a/internal/xiaomi/ptz_test.go b/internal/xiaomi/ptz_test.go
+new file mode 100644
+index 0000000..f6c188d
+--- /dev/null
++++ b/internal/xiaomi/ptz_test.go
+@@ -0,0 +1,43 @@
++package xiaomi
++
++import "testing"
++
++// 桌面版没有网关按型号查 miot-spec 的能力，只能按白名单 fail-closed：
++// 云台机显示方向盘，固定机 / 门铃 / 未知型号一律不显示。
++func TestBuildPTZSpec(t *testing.T) {
++	for _, model := range []string{
++		"chuangmi.camera.029a02",
++		"chuangmi.camera.039c01",
++		"chuangmi.camera.81ac1",
++		"chuangmi.camera.12ab1",
++		"xiaovv.camera.q8",
++		"xiaovv.camera.fjcam3",
++	} {
++		spec := buildPTZSpec(model)
++		if !spec.Supported || spec.Channel != "miss" {
++			t.Errorf("%s: want supported miss channel, got %+v", model, spec)
++		}
++		if len(spec.Dirs) != 4 {
++			t.Errorf("%s: want 4 dirs, got %v", model, spec.Dirs)
++		}
++	}
++
++	for _, model := range []string{
++		"",
++		"madv.cateye.mi3iot",  // 门铃
++		"mijia.camera.v3",     // 固定机
++		"chuangmi.camera.999", // 未收录型号
++	} {
++		spec := buildPTZSpec(model)
++		if spec.Supported || len(spec.Dirs) != 0 {
++			t.Errorf("%q: want fail-closed, got %+v", model, spec)
++		}
++		if spec.Note == "" {
++			t.Errorf("%q: want a note explaining why the pad is hidden", model)
++		}
++	}
++
++	if !ptzKnown("CHUANGMI.CAMERA.81AC1") {
++		t.Error("model lookup should be case-insensitive")
++	}
++}
 diff --git a/internal/xiaomi/xiaomi.go b/internal/xiaomi/xiaomi.go
-index 957c9d7..99c2e4c 100644
+index 957c9d7..2d8a699 100644
 --- a/internal/xiaomi/xiaomi.go
 +++ b/internal/xiaomi/xiaomi.go
 @@ -8,6 +8,7 @@ import (
@@ -51,16 +100,42 @@ index 957c9d7..99c2e4c 100644
  	"strings"
  	"sync"
  
-@@ -51,6 +52,61 @@ func Init() {
+@@ -51,6 +52,254 @@ func Init() {
  	})
  
  	api.HandleFunc("api/xiaomi", apiXiaomi)
 +	api.HandleFunc("api/xiaomi/command", apiCommand)
++	api.HandleFunc("/ptz/spec", apiPTZSpec)
++	api.HandleFunc("/ptz", apiPTZ)
 +}
 +
 +// commandSender 由 pkg/xiaomi/miss.Producer 实现。
 +type commandSender interface {
 +	SendCommand(cmd uint32, payload []byte) ([]byte, error)
++}
++
++var (
++	errStreamNotFound = errors.New("stream not found")
++	errNoXiaomiCamera = errors.New("no Xiaomi camera is playing on this stream")
++)
++
++// sendStreamCommand 把一条 MISS 命令交给正在播放的连接。
++// 网关的 /api/xiaomi/command 和桌面版的 /ptz 共用这一条路径。
++func sendStreamCommand(src string, cmd uint32, payload string) ([]byte, error) {
++	stream := streams.Get(src)
++	if stream == nil {
++		return nil, errStreamNotFound
++	}
++
++	for _, conn := range stream.Conns() {
++		sender, ok := conn.(commandSender)
++		if !ok {
++			continue
++		}
++		return sender.SendCommand(cmd, []byte(payload))
++	}
++
++	return nil, errNoXiaomiCamera
 +}
 +
 +// apiCommand 把一条原始 MISS 命令发给「正在播放」的小米摄像机，例如云台：
@@ -77,9 +152,9 @@ index 957c9d7..99c2e4c 100644
 +
 +	query := r.URL.Query()
 +
-+	stream := streams.Get(query.Get("src"))
-+	if stream == nil {
-+		http.Error(w, "stream not found", http.StatusNotFound)
++	// 保持原来的错误优先级：先确认流存在，再看 cmd 是否合法。
++	if streams.Get(query.Get("src")) == nil {
++		http.Error(w, errStreamNotFound.Error(), http.StatusNotFound)
 +		return
 +	}
 +
@@ -89,27 +164,194 @@ index 957c9d7..99c2e4c 100644
 +		return
 +	}
 +
-+	for _, conn := range stream.Conns() {
-+		sender, ok := conn.(commandSender)
-+		if !ok {
-+			continue
-+		}
-+
-+		reply, err := sender.SendCommand(uint32(cmd), []byte(query.Get("data")))
-+		if err != nil {
++	reply, err := sendStreamCommand(query.Get("src"), uint32(cmd), query.Get("data"))
++	if err != nil {
++		switch {
++		case errors.Is(err, errStreamNotFound):
++			http.Error(w, err.Error(), http.StatusNotFound)
++		case errors.Is(err, errNoXiaomiCamera):
++			http.Error(w, err.Error(), http.StatusConflict)
++		default:
 +			http.Error(w, err.Error(), http.StatusInternalServerError)
-+			return
 +		}
-+
-+		api.ResponseJSON(w, map[string]any{
-+			"ok":    true,
-+			"reply": string(reply),
-+			"hex":   hex.EncodeToString(reply),
-+		})
 +		return
 +	}
 +
-+	http.Error(w, "no Xiaomi camera is playing on this stream", http.StatusConflict)
++	api.ResponseJSON(w, map[string]any{
++		"ok":    true,
++		"reply": string(reply),
++		"hex":   hex.EncodeToString(reply),
++	})
++}
++
++// ---------------------------------------------------------------- 桌面版云台
++//
++// 桌面版（Electron）不启动 imi-gateway，UI 由 go2rtc 的 static_dir 直接提供，
++// 所以这里补一份响应结构与网关 /ptz、/ptz/spec 相同的实现。
++//
++// 能力判定 fail-closed：只认流地址里 model= 命中的云台白名单。固定摄像机、
++// 门铃和未知型号一律不显示方向盘，避免「按了没反应」。
++var ptzModels = map[string]bool{
++	"chuangmi.camera.029a02": true, // 米家 360° 2K 云台版
++	"chuangmi.camera.039c01": true, // 小米智能摄像机 2 云台版
++	"chuangmi.camera.81ac1":  true, // 小米智能摄像机 C700
++	"chuangmi.camera.12ab1":  true, // 创米云台机型
++	"xiaovv.camera.q8":       true, // xiaovv 2K 云台
++	"xiaovv.camera.fjcam3":   true, // xiaovv 母婴看护云台
++}
++
++var (
++	ptzDirs = []string{"left", "right", "up", "down"}
++	// MISS 0x112 电机命令：1=左 2=右 3=上 4=下，-1001=停止。
++	ptzOps = map[string]int{"left": 1, "right": 2, "up": 3, "down": 4}
++)
++
++const (
++	ptzMissCmd = 0x112
++	ptzStopOp  = -1001
++)
++
++type ptzSpec struct {
++	Model      string   `json:"model"`
++	Siid       int      `json:"siid"`
++	Aiid       int      `json:"aiid"`
++	Piid       int      `json:"piid"`
++	Format     string   `json:"format"`
++	Action     string   `json:"action"`
++	Source     string   `json:"source"`
++	Note       string   `json:"note,omitempty"`
++	Dirs       []string `json:"dirs"`
++	Supported  bool     `json:"supported"`
++	PTZCapable bool     `json:"ptzCapable"`
++	Channel    string   `json:"channel,omitempty"`
++}
++
++// streamModel 从流的原始地址里取 model= 参数（添加摄像头时由 go2rtc 写入）。
++func streamModel(name string) string {
++	stream := streams.Get(name)
++	if stream == nil {
++		return ""
++	}
++	for _, source := range stream.Sources() {
++		u, err := url.Parse(source)
++		if err != nil {
++			continue
++		}
++		if model := u.Query().Get("model"); model != "" {
++			return model
++		}
++	}
++	return ""
++}
++
++func ptzKnown(model string) bool {
++	return model != "" && ptzModels[strings.ToLower(model)]
++}
++
++func buildPTZSpec(model string) *ptzSpec {
++	spec := &ptzSpec{Model: model}
++	if ptzKnown(model) {
++		spec.Supported = true
++		spec.PTZCapable = true
++		spec.Channel = "miss"
++		spec.Source = "miss"
++		spec.Action = "MISS 0x112 motor"
++		spec.Dirs = ptzDirs
++		spec.Note = "转动命令走视频连接里的命令通道；画面不动说明这台不是云台机或已到角度极限"
++		return spec
++	}
++	// 查不到型号时 fail-closed：宁可少显示，也不能给固定机 / 门铃
++	// 显示一个按了没反应的方向盘。
++	if model == "" {
++		spec.Note = "流地址里没有型号信息，桌面版按 fail-closed 隐藏方向盘"
++	} else {
++		spec.Note = "该型号不在已知云台机型列表中，桌面版按 fail-closed 隐藏方向盘"
++	}
++	return spec
++}
++
++// apiPTZSpec 查询某个画面能不能控云台，响应结构与网关 /ptz/spec 对齐。
++func apiPTZSpec(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodGet && r.Method != http.MethodPost {
++		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
++		return
++	}
++
++	q := r.URL.Query()
++	name := strings.TrimSpace(q.Get("name"))
++	model := streamModel(name)
++
++	api.ResponseJSON(w, map[string]any{
++		"ok":    true,
++		"did":   q.Get("did"),
++		"name":  name,
++		"model": model,
++		"spec":  buildPTZSpec(model),
++	})
++}
++
++// apiPTZ 执行云台指令，响应结构与网关 /ptz 对齐。
++func apiPTZ(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodGet && r.Method != http.MethodPost {
++		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
++		return
++	}
++
++	q := r.URL.Query()
++	name := strings.TrimSpace(q.Get("name"))
++	move := strings.ToLower(strings.TrimSpace(q.Get("move")))
++	model := streamModel(name)
++
++	writeErr := func(status int, msg string) {
++		w.Header().Set("Content-Type", api.MimeJSON)
++		w.WriteHeader(status)
++		_ = json.NewEncoder(w).Encode(map[string]any{
++			"ok": false, "error": msg, "name": name, "move": move,
++			"model": model, "channel": "miss", "dirs": ptzDirs,
++		})
++	}
++
++	if move == "" {
++		writeErr(http.StatusBadRequest, "缺少 move")
++		return
++	}
++	if name == "" {
++		writeErr(http.StatusBadRequest, "缺少 name（画面名），命令发不到摄像机")
++		return
++	}
++
++	op := ptzStopOp
++	if move != "stop" {
++		// 与 /ptz/spec 同一套判定：未知型号不发转动指令。
++		if !ptzKnown(model) {
++			writeErr(http.StatusNotImplemented, "该型号不在已知云台机型列表中，不发送云台指令")
++			return
++		}
++		var ok bool
++		if op, ok = ptzOps[move]; !ok {
++			writeErr(http.StatusBadRequest, fmt.Sprintf("云台只有上下左右四个方向，没有「%s」", move))
++			return
++		}
++	}
++
++	payload := fmt.Sprintf(`{"operation":%d}`, op)
++	reply, err := sendStreamCommand(name, ptzMissCmd, payload)
++	if err != nil {
++		switch {
++		case errors.Is(err, errStreamNotFound):
++			writeErr(http.StatusNotFound, "播放引擎里没有这个画面")
++		case errors.Is(err, errNoXiaomiCamera):
++			writeErr(http.StatusConflict, "画面还没连上摄像机，等画面出来再控制云台")
++		default:
++			writeErr(http.StatusBadGateway, err.Error())
++		}
++		return
++	}
++
++	api.ResponseJSON(w, map[string]any{
++		"ok": true, "channel": "miss", "name": name, "move": move,
++		"model": model, "data": payload, "reply": string(reply),
++	})
  }
  
  var log zerolog.Logger

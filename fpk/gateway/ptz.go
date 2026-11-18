@@ -17,6 +17,10 @@ package main
 //    所以先去 miot-spec.org 按型号拉公开规格解析；解析不到再回退 2/1/1。
 //
 // 命令通道必须「画面正在播」才可用：摄像头只在视频连接里接受这类命令。
+//
+// 桌面版（Electron）不启动网关，由 fpk/patches/xiaomi-control.patch 在 go2rtc
+// 里提供响应结构相同的 /ptz、/ptz/spec；那份实现没有云端接口，只按型号白名单
+// fail-closed，固定机和门铃不会出现方向盘。
 
 import (
 	"encoding/json"

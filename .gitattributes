@@ -1,0 +1,3 @@
+# go2rtc 补丁必须保持 LF。Windows 上 git 默认会把文本转成 CRLF，
+# 而源码 tarball 解出来是 LF，上下文行带 CR 会让 git apply 匹配失败。
+*.patch text eol=lf

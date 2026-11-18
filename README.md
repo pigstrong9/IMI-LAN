@@ -56,7 +56,7 @@ Windows 用户直接下载 [Releases](https://github.com/pigstrong9/IMI-LAN/rele
 仓库不含登录令牌、摄像头地址和引擎二进制（都在 `.gitignore` 里），第一次克隆后需要补齐三样东西：
 
 1. 配置：复制 `go2rtc.yaml.example` 为 `go2rtc.yaml`。
-2. 引擎：**不能直接用官方原版**（小米登录会 401）。用 `fpk/patches/xiaomi-login.patch` 给 go2rtc 1.9.15 打补丁后自行编译 Windows 版，改名成 `go2rtc.exe` 放到项目根目录；补丁同时修复登录 Cookie 和 token 回写。
+2. 引擎：**不能直接用官方原版**（小米登录会 401，也没有云台接口）。按顺序给 go2rtc 1.9.15 打 `fpk/patches/xiaomi-login.patch` → `fpk/patches/xiaomi-control.patch` 后自行编译 Windows 版，改名成 `go2rtc.exe` 放到项目根目录；前者修复登录 Cookie 和 token 回写，后者提供云台命令接口与桌面版 `/ptz`、`/ptz/spec`。
 3. 转码兜底：把 ffmpeg 的 Windows 构建放进 `bin/`，文件名保持 `ffmpeg.exe`（配置里 `ffmpeg.bin` 指向它）。自己用哪个构建都行；**如果打算把目录发给别人，选 LGPL 构建**，GPL 构建会带上提供源码的义务。
 
 之后扫码登录，令牌和摄像头地址会自动写进 `go2rtc.yaml`。
@@ -118,7 +118,7 @@ macOS 版由 `.github/workflows/build-dmg.yml` 在 GitHub Actions 上构建（In
 
 - 可写配置在 `~/Library/Application Support/IMI-LAN/go2rtc.yaml`，首次启动从应用包内复制；升级或覆盖安装不会丢登录令牌和摄像头
 - 日志在 `~/Library/Logs/IMI-LAN/`（`engine.log`、`qr-login.log`）
-- 包内引擎与 Windows / fnOS / 安卓同源：CI 下载 go2rtc v1.9.15 源码、打 `fpk/patches/xiaomi-login.patch` 后交叉编译，再用 `lipo` 合并成通用二进制；不要换成官方 release 二进制，那里面没有补丁，读不到扫码保存的 `xiaomi-credentials`
+- 包内引擎与 Windows / fnOS / 安卓同源：CI 下载 go2rtc v1.9.15 源码，按顺序打 `fpk/patches/xiaomi-login.patch` → `fpk/patches/xiaomi-control.patch` 后交叉编译，再用 `lipo` 合并成通用二进制；不要换成官方 release 二进制，那里面没有补丁，读不到扫码保存的 `xiaomi-credentials`，也没有云台接口
 - 和 Windows 版一样，本机 `127.0.0.1:19840` 的 go2rtc API 没有额外认证，同机进程能读到配置
 - 本地构建：`cd desktop && npm ci`，按 workflow 的「Prepare vendor files」准备 `vendor/`（引擎、配置、`web`、`qr-login.js`），再 `npm run pack:mac`
 - 包内引擎与配置模板见 `desktop/go2rtc.mac.yaml`，不要用本地 `go2rtc.yaml`（含真实凭据，已被 `.gitignore` 排除）
@@ -196,8 +196,13 @@ python android/build.py --abi arm64-v8a
 - **吊装 / 倒装的摄像头要先选「方向反转」**。整机转了 180° 之后画面是正的但方向是反的：
   按「左」画面往右走。设置里提供了 正常 / 左右反 / 上下反 / 全反 四档，吸顶安装一般选「全反」。
 - 部分型号（尤其是不带云台的固定机）没有云台，此时方向盘不会出现。
-- **平台支持**：安卓版、fnOS / NAS 版可用（网关需要带 `-config` 指向 go2rtc.yaml，安装包已配置好）；
-  桌面版（Windows / macOS 的 Electron 包）不经过网关，暂不支持云台，打开这类画面时方向盘不会出现。
+- **平台支持**：安卓版、fnOS / NAS 版走网关（需要带 `-config` 指向 go2rtc.yaml，安装包已配置好），
+  会按型号查公开规格，必要时再走 MIoT 云端兜底；桌面版（Windows / macOS 的 Electron 包）
+  不经过网关，由打了 `xiaomi-control` 补丁的 go2rtc 直接提供 `/ptz` 与 `/ptz/spec`。
+- **桌面版按白名单 fail-closed**：只从流地址的 `model=` 识别已知云台机型（C700、创米云台、
+  xiaovv 云台等，名单见 `fpk/patches/xiaomi-control.patch`）。型号为空或未收录时方向盘
+  不会出现，固定机 / 门铃也不会出现「按了没反应」的方向盘。桌面版不接 MIoT 云端兜底，
+  主路径就是局域网 MISS 命令。
 
 > 顺带修掉了一个一直在的问题：命令通道登录之后如果没人读，`cs2` 的接收缓冲（10 条）
 > 迟早会被填满，连接被判失效。表现是部分机型（如 C700）大约每 110 秒断流一次、
