@@ -571,7 +571,7 @@ func specWithChannel(model string, spec *ptzSpec) *ptzSpec {
 }
 
 // firstAccount 稳定地选一个已登录账号（map 遍历顺序是随机的，多账号时
-// 每次请求挑到不同账号会让问题难以复现）。
+// 每次请求挑到不同账号会让问题难以复现）。仅作为没有设备信息时的兜底。
 func (s *qrService) firstAccount() string {
 	tokens := s.readXiaomiTokens()
 	keys := make([]string, 0, len(tokens))
@@ -581,6 +581,37 @@ func (s *qrService) firstAccount() string {
 	sort.Strings(keys)
 	if len(keys) == 0 {
 		return ""
+	}
+	return keys[0]
+}
+
+// accountForDevice 选出这次云台请求该用哪个账号查型号。
+// 前端正常路径会带 id（state.user），这里处理的是没带 id 的边界：
+// 多账号时按字典序取第一个可能不是设备所属账号，导致型号查不到、提示文案失真。
+// 有 did 时按设备反查所属账号；查不到再退回 firstAccount —— 保持 fail-open，
+// 不返回错误让方向盘消失（命令通道按流名定位，本就不依赖这个账号）。
+func (s *qrService) accountForDevice(requested, region, did string) string {
+	if requested != "" {
+		return requested
+	}
+	tokens := s.readXiaomiTokens()
+	keys := make([]string, 0, len(tokens))
+	for k := range tokens {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	if len(keys) == 1 || did == "" {
+		return keys[0]
+	}
+	// 多账号：找到房间里确实有这台设备的账号。fetchRooms 自带缓存，
+	// 账号数通常很少，这里的额外查询只在未带 id 的多账号场景发生。
+	for _, k := range keys {
+		if _, err := s.deviceModelOf(k, region, did); err == nil {
+			return k
+		}
 	}
 	return keys[0]
 }
@@ -598,10 +629,7 @@ func (s *qrService) registerPTZ(mux *http.ServeMux) {
 		if region == "" {
 			region = "cn"
 		}
-		user := r.URL.Query().Get("id")
-		if user == "" {
-			user = s.firstAccount()
-		}
+		user := s.accountForDevice(r.URL.Query().Get("id"), region, did)
 
 		// 型号只用来把说明写准一点，查不到也不影响走命令通道
 		var model string
@@ -633,10 +661,7 @@ func (s *qrService) registerPTZ(mux *http.ServeMux) {
 		if region == "" {
 			region = "cn"
 		}
-		user := q.Get("id")
-		if user == "" {
-			user = s.firstAccount()
-		}
+		user := s.accountForDevice(q.Get("id"), region, did)
 		if move == "" {
 			s.sendJSON(w, r, 400, map[string]any{"ok": false, "error": "缺少 move"})
 			return

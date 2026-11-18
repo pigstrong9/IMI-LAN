@@ -3861,24 +3861,21 @@ function ptzSendStop(name) {
 // 立刻兑现「欠着的停止」并清掉按键定时器。关画面、收方向盘、切摄像头都要走这里。
 function ptzStopNow() {
   const pad = $('#ptzPad');
-  // 松手时 stop() 已经移除了 .on、并可能把真正的停止命令放在定时器里。
-  // 关画面 / 切摄像头时必须把这笔「欠着的停止」立刻兑现，否则电机会一直转。
+  // 松手时 stop() 已移除 .on、并把真正的停止命令放进 stopTimer；长按中则是 moving。
+  // 两种「欠着的停止」都只补发一次：movePromise 的清空/串行化交给 ptzSendStop 独占，
+  // 这里只负责定时器与视觉状态，避免两处重复清理掩盖发令时序。
+  const owed = !!ptz.stopTimer || ptz.moving;
   if (ptz.stopTimer) {
     clearTimeout(ptz.stopTimer);
     ptz.stopTimer = 0;
-    ptzSendStop();
-  } else if (ptz.moving) {
-    ptzSendStop();
   }
-  ptz.moving = false;
-  ptz.movePromise = null;
-  clearTimeout(ptz.stopTimer);
-  ptz.stopTimer = 0;
   clearTimeout(ptz.pressTimer);
   clearInterval(ptz.repeatTimer);
   clearTimeout(ptz.holdTimer);
   ptz.pressTimer = ptz.repeatTimer = ptz.holdTimer = 0;
+  ptz.moving = false;
   if (pad) $$('.ptz-btn.on', pad).forEach(b => b.classList.remove('on'));
+  if (owed) ptzSendStop();
 }
 
 // 方向盘平时属于查看器；1×1 单窗口时临时挪进卡片，切回去要还原。
