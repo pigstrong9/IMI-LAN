@@ -302,15 +302,20 @@ object Engine {
     }
 
     private fun health(): String? {
-        val conn = URL("http://127.0.0.1:$WEB_PORT/__imi/health").openConnection() as HttpURLConnection
+        // 部分平板（如 TB710FU / Android 16）上 HttpURLConnection 访问 127.0.0.1
+        // 会一直 SocketTimeoutException，而网关其实秒回（adb shell 里 nc 可验证）。
+        // 这里改用原始 Socket（和 waitPort 一样可靠），绕开 Java HTTP 栈的代理/调度问题。
         return try {
-            conn.connectTimeout = 400
-            conn.readTimeout = 400
-            conn.requestMethod = "GET"
-            if (conn.responseCode != 200) return null
-            conn.inputStream.bufferedReader().use { it.readText() }
-        } finally {
-            conn.disconnect()
+            Socket().use { s ->
+                s.connect(InetSocketAddress("127.0.0.1", WEB_PORT), 1000)
+                s.soTimeout = 1000
+                val req = "GET /__imi/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+                s.getOutputStream().write(req.toByteArray(Charsets.US_ASCII))
+                s.getOutputStream().flush()
+                s.getInputStream().bufferedReader(Charsets.US_ASCII).use { it.readText() }
+            }
+        } catch (_: Throwable) {
+            null
         }
     }
 
