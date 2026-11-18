@@ -18,7 +18,7 @@ const state = {
   devices: [],
   viewer: null,          // {name, player, recorder, microphone}
   paused: new Set(loadJSON('imi.paused', [])),   // 用户手动暂停的摄像头
-  settings: { layout: '1x1', gridLayout: '2x2', scope: 'room', display: 'fill', hideBattery: true, keepAlive: true, bgSleep: true, theme: 'auto', roomLayouts: {}, ...loadJSON('imi.settings', {}) },
+  settings: { layout: '1x1', gridLayout: '2x2', scope: 'room', display: 'fill', box: 'auto', fit: 'cover', hideBattery: true, keepAlive: true, bgSleep: true, theme: 'auto', roomLayouts: {}, ptzFlip: 'none', ptzStep: 1, setTab: 'display', ...loadJSON('imi.settings', {}) },
   streamUrls: {},        // name -> 配置里的流地址（/api/streams 激活后不含 url）
   roomData: cachedRooms(), // 本地助手 /rooms 返回的米家房间与设备映射（启动时先用上次缓存）
 };
@@ -79,8 +79,73 @@ function cachedRooms() {
   return data && Array.isArray(data.devices) ? data : null;
 }
 
+/* 每个摄像头最近一帧：切画面、重连、换画质时先铺这张图，别直接黑屏。
+   只放内存不落盘（一帧 480 长边约 25KB），最多留 12 台。 */
+const stills = new Map();
+const STILL_MAX = 12;
+
+function rememberStill(name, video) {
+  if (!name || !video) return;
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (!w || !h) return;
+  try {
+    const scale = Math.min(1, 480 / Math.max(w, h));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(w * scale));
+    cv.height = Math.max(1, Math.round(h * scale));
+    cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+    const url = cv.toDataURL('image/jpeg', 0.7);
+    stills.delete(name);
+    stills.set(name, url);
+    while (stills.size > STILL_MAX) stills.delete(stills.keys().next().value);
+  } catch {
+    // 跨域流会把 canvas 标成 tainted，取不到就算了，不影响播放
+  }
+}
+
+function stillOf(name) {
+  return (name && stills.get(name)) || '';
+}
+
 function saveMeta() {
   localStorage.setItem('imi.meta', JSON.stringify(state.meta));
+}
+
+/**
+ * 复制一段文字。安卓 WebView 里 navigator.clipboard 只在部分版本可用，
+ * 失败就退回 textarea + execCommand，这条路在 WebView 里一直是通的。
+ */
+function copyText(text, label) {
+  const value = (text || '').trim();
+  if (!value || value === '—') {
+    toast('暂无可复制的内容', true);
+    return;
+  }
+  const done = () => toast(`${label}已复制`);
+  const legacy = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = value;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, value.length);
+      document.execCommand('copy');
+      ta.remove();
+      done();
+    } catch (_) {
+      toast('复制失败，可长按选中手动复制', true);
+    }
+  };
+  try {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(value).then(done, legacy);
+      return;
+    }
+  } catch (_) { /* 落到 legacy */ }
+  legacy();
 }
 
 function toast(message, isError = false) {
@@ -286,10 +351,59 @@ function themeMode() {
   return state.settings.theme || 'auto';
 }
 
+// 安卓 WebView 里 prefers-color-scheme 不一定可靠：改系统深色模式时页面不会重建，
+// change 事件也未必往网页派发。所以读数统一走这里，并在多个时机主动重算。
+// 优先级：壳的推送 > 壳的桥 > matchMedia。壳接管 uiMode 后 WebView 的
+// prefers-color-scheme 可能停在旧值，所以启动时经 IMIShell 问一次，切系统主题时由壳推。
+let shellDark = null;
+
+function systemPrefersDark() {
+  if (shellDark !== null) return shellDark;
+  try {
+    const bridge = window.IMIShell;
+    if (bridge && typeof bridge.isNightMode === 'function') {
+      const v = bridge.isNightMode();
+      if (typeof v === 'boolean') return v;
+    }
+  } catch (_) { /* 桌面浏览器没有桥，走下面的 matchMedia */ }
+  try { return matchMedia('(prefers-color-scheme: dark)').matches; } catch (_) { return false; }
+}
+
+function resolvedDark(mode) {
+  if (mode === 'dark') return true;
+  if (mode === 'light') return false;
+  return systemPrefersDark();
+}
+
+// 自动模式下把系统读数写回设置面板：读得对不对一眼就能看出来，不用猜。
+function updateThemeHint(mode = themeMode(), dark = resolvedDark(mode)) {
+  const el = $('#themeHint');
+  if (!el) return;
+  if (mode === 'auto') {
+    el.textContent = `自动：跟随手机的深色模式（当前判定为${dark ? '深色' : '浅色'}）`;
+  } else if (mode === 'light') {
+    el.textContent = '始终使用亮色，不跟随手机';
+  } else {
+    el.textContent = '始终使用深色，不跟随手机';
+  }
+}
+
+/**
+ * 壳的窗口底色与系统栏图标跟着「实际生效的外观」走，而不是跟着系统深浅色。
+ * 手动选暗色时手机还是浅色模式，壳只按 isNightMode() 判断会把状态栏那条留成
+ * 白色，和暗色页面拼在一起非常割裂。所以每次应用主题都通知壳一次。
+ */
+function syncShellChrome(dark) {
+  try {
+    const bridge = window.IMIShell;
+    if (bridge && typeof bridge.setDarkChrome === 'function') bridge.setDarkChrome(!!dark);
+  } catch (_) { /* 桌面浏览器 / 旧版壳没有这个桥 */ }
+}
+
 function applyTheme(mode, persist = true) {
   state.settings.theme = mode;
   if (persist) saveSettings();
-  const dark = mode === 'dark' || (mode === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  const dark = resolvedDark(mode);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   const btn = $('#btnTheme');
   if (btn) {
@@ -297,7 +411,29 @@ function applyTheme(mode, persist = true) {
     btn.title = `主题：${mode === 'auto' ? '跟随系统' : mode === 'light' ? '亮色' : '暗色'}（点击切换）`;
   }
   $$('#themeSeg [data-theme]').forEach(b => b.classList.toggle('on', b.dataset.theme === mode));
+  updateThemeHint(mode, dark);
+  syncShellChrome(dark);
 }
+
+// 回到前台 / 页面重新可见 / 窗口获焦时重算一次自动主题，
+// 弥补 WebView 不派发 prefers-color-scheme change 的情况。
+function resyncAutoTheme() {
+  if (themeMode() !== 'auto') return;
+  if (document.documentElement.dataset.theme !== (systemPrefersDark() ? 'dark' : 'light')) {
+    applyTheme('auto', false);
+  } else {
+    updateThemeHint();
+  }
+}
+
+// 安卓壳声明了 uiMode 变化由自己处理（configChanges 含 uiMode），页面不会重建。
+// 切系统深浅色时壳会主动调这个函数，让自动模式立刻跟上。
+window.__imiResyncTheme = resyncAutoTheme;
+// 壳在系统深浅色变化时推过来；传 null（或非布尔）表示交回 matchMedia 自己判断。
+window.__imiSetSystemDark = (v) => {
+  shellDark = typeof v === 'boolean' ? v : null;
+  resyncAutoTheme();
+};
 
 function cycleTheme() {
   const order = ['auto', 'light', 'dark'];
@@ -316,9 +452,21 @@ function updateLayoutUI() {
   if (sel) sel.value = layout;
   const tools = $('#gridTools');
   if (tools) tools.hidden = layout === '1x1';
-  const dsel = $('#setDisplay');
-  if (dsel) dsel.value = state.settings.display === 'fill' ? 'fill' : 'ratio';
-  $$('#displaySeg [data-display]').forEach(b => b.classList.toggle('on', b.dataset.display === (state.settings.display === 'fill' ? 'fill' : 'ratio')));
+  const box = state.settings.box || 'auto';
+  const fit = state.settings.fit || 'cover';
+  $$('#boxSeg [data-box]').forEach(b => b.classList.toggle('on', b.dataset.box === box));
+  $$('#fitSeg [data-fit]').forEach(b => b.classList.toggle('on', b.dataset.fit === fit));
+}
+
+/**
+ * 切换「填充方式」时已连上的播放器不会重建（重建就要重新握手、画面闪一下），
+ * 所以直接把 object-fit 改到现有 video 上；之后新建的播放器仍走 makePlayer 的选项。
+ */
+function applyFitLive() {
+  const fit = state.settings.fit === 'contain' ? 'contain' : 'cover';
+  document.querySelectorAll('.card-media video, #viewerStage video').forEach((v) => {
+    v.style.objectFit = fit;
+  });
 }
 
 function closeLayoutMenu() {
@@ -367,7 +515,9 @@ function selectRoom(name) {
   rememberLayout();
   state.settings.single = name;
   state.settings.scope = 'room';
-  state.settings.layout = savedLayoutFor(roomLabel(name));
+  // 手机上点房间 = 看这一路：保持单画面。原来会回落到 gridLayout（默认 2x2），
+  // 于是每点一次摄像机都被弹成 4 宫格。
+  state.settings.layout = narrowScreen() ? '1x1' : savedLayoutFor(roomLabel(name));
   saveSettings();
   closeLayoutMenu();
   updateLayoutUI();
@@ -396,8 +546,16 @@ function layoutSpec() {
   return LAYOUTS[state.settings.layout] || LAYOUTS['2x2'];
 }
 
-// 首页布局要同时满足：媒体区 16:9、不裁剪、尽量铺满窗口。
+// 首页布局要同时满足：媒体区按所选比例、不裁剪、尽量铺满窗口。
 // 宽度受限时按宽度算；高度受限时按高度反推卡片宽度，再整体居中。
+/** 「窗口比例」的数值形式；自适应（auto）返回 0，表示由窗口决定。 */
+function boxAspect() {
+  const box = state.settings.box || 'auto';
+  if (box === '4:3') return 4 / 3;
+  if (box === '16:9') return 16 / 9;
+  return 0;
+}
+
 function fitGrid(count) {
   const grid = $('#grid');
   if (document.body.classList.contains('wall')) return;
@@ -415,10 +573,11 @@ function fitGrid(count) {
   if (!availW || !availH) return;
 
   const rows = spec.limit ? Math.ceil(spec.limit / cols) : Math.max(1, Math.ceil(count / cols));
+  const ar = boxAspect(); // 16:9 或 4:3，自适应布局不会走到这里
   const byWidth = (availW - gap * (cols - 1)) / cols;
-  const byHeight = (availH - gap * (rows - 1)) / rows * 16 / 9;
+  const byHeight = (availH - gap * (rows - 1)) / rows * ar;
   const width = Math.max(200, Math.floor(Math.min(byWidth, byHeight)));
-  const rowH = Math.ceil((width - 2) * 9 / 16);
+  const rowH = Math.ceil((width - 2) / ar);
   grid.style.setProperty('--grid-card-w', width + 'px');
   grid.style.setProperty('--grid-row-h', rowH + 'px');
 }
@@ -473,12 +632,18 @@ function updateOnlineStatus() {
   }
 }
 
+// 房间条上一次渲染的签名：每 5 秒整体 innerHTML 重建会连带重排整个侧栏
+let roomsSig = '';
+
 function renderRooms() {
   const box = $('#roomList');
   if (!box) return;
   const names = cameraList();
   if (!names.length) {
-    box.innerHTML = '<div class="room-empty">还没有<br>摄像头</div>';
+    if (roomsSig !== '@empty') {
+      box.innerHTML = '<div class="room-empty">还没有摄像头</div>';
+      roomsSig = '@empty';
+    }
     updateOnlineStatus();
     return;
   }
@@ -493,6 +658,15 @@ function renderRooms() {
   const allLive = names.filter(cameraOnline).length;
   const scopeAll = state.settings.scope === 'all';
   const activeRoom = scopeAll ? '' : roomLabel(state.settings.single || '');
+
+  const sig = names.map(n => n + ':' + (cameraOnline(n) ? 1 : 0)).join('|')
+    + '#' + scopeAll + '#' + activeRoom;
+  if (sig === roomsSig) {
+    updateOnlineStatus();
+    return;
+  }
+  roomsSig = sig;
+
   let html = '';
   for (const [label, group] of groups) {
     const live = group.filter(cameraOnline).length;
@@ -511,6 +685,17 @@ function renderRooms() {
       <em>${allLive}/${names.length}</em>
     </button>`;
   box.innerHTML = html;
+
+  // 手机上是横向滚动条：把当前选中的摄像机滚到可视区中间。
+  // 不用 scrollIntoView —— 它会连带滚动所有可滚祖先，横向条里容易把页面一起带跑。
+  if (box.scrollWidth > box.clientWidth) {
+    const on = box.querySelector('.room.on');
+    if (on) {
+      const target = on.offsetLeft - (box.clientWidth - on.offsetWidth) / 2;
+      box.scrollLeft = Math.max(0, Math.min(target, box.scrollWidth - box.clientWidth));
+    }
+  }
+
   updateOnlineStatus();
 }
 
@@ -526,8 +711,13 @@ function levelForRate(mbps) {
   return 1;
 }
 
+// 手机上码率信息是隐藏的，没必要每 2 秒取一次数据再写 DOM
+let lastSignalAt = 0;
+
 async function pollSignals() {
   if (state.pageHidden || state.viewer || signalBusy || !state.cards.size) return;
+  if (narrowScreen() && Date.now() - lastSignalAt < 10000) return;
+  lastSignalAt = Date.now();
   signalBusy = true;
   try {
     const data = await api('/api/streams');
@@ -591,6 +781,24 @@ function updateSingleNav(names) {
   }
 }
 
+// 手机窄屏判定，与 CSS 的 600px 断点保持一致
+function narrowScreen() {
+  try { return matchMedia('(max-width: 600px)').matches; } catch (_) { return false; }
+}
+
+// 触屏判定：决定「单击卡片是否直接进单画面」
+function pointerCoarse() {
+  try { return matchMedia('(pointer: coarse)').matches; } catch (_) { return false; }
+}
+
+// 单画面刚打开的时刻：手指第二下落下时要忽略，否则会被当成「双击退出」
+let viewerOpenedAt = 0;
+
+// 轻触反馈：安卓 / 鸿蒙 有振动马达，iOS 浏览器忽略即可
+function haptic(ms) {
+  try { if (navigator.vibrate) navigator.vibrate(ms || 8); } catch (_) {}
+}
+
 function stepSingle(dir) {
   const names = cameraList();
   if (names.length < 2) return;
@@ -599,6 +807,39 @@ function stepSingle(dir) {
   state.settings.single = names[(i + dir + names.length) % names.length];
   saveSettings();
   refreshStreams();
+}
+
+// 单画面左右滑动切换摄像机：HIG 与鸿蒙都以此为主手势，
+// 比去够顶部的下拉框顺手得多。缩放手势开启或落在按钮上时不接管。
+let swipeX = 0, swipeY = 0, swipeAt = 0, swipeOn = false;
+
+function bindSwipeSwitch() {
+  const host = document.querySelector('.stage-body');
+  if (!host) return;
+
+  host.addEventListener('touchstart', ev => {
+    swipeOn = false;
+    if (state.viewer) return;
+    if (state.settings.layout !== '1x1') return;
+    if (ev.touches.length !== 1) return;
+    if (ev.target.closest('button, .card-tools, .card-menu-btn, .zoom-hud, .zoom-on')) return;
+    const t = ev.touches[0];
+    swipeX = t.clientX; swipeY = t.clientY; swipeAt = Date.now();
+    swipeOn = true;
+  }, { passive: true });
+
+  host.addEventListener('touchend', ev => {
+    if (!swipeOn) return;
+    swipeOn = false;
+    const t = ev.changedTouches && ev.changedTouches[0];
+    if (!t) return;
+    if (Date.now() - swipeAt > 700) return;
+    const dx = t.clientX - swipeX;
+    const dy = t.clientY - swipeY;
+    if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    stepSingle(dx < 0 ? 1 : -1);
+    haptic();
+  }, { passive: true });
 }
 
 function isBatteryModel(model) {
@@ -688,6 +929,9 @@ async function checkEngine() {
   }
 }
 
+// 上一次渲染用的布局签名：可见集合与布局都没变时，不再写 DOM
+let lastGridSig = '';
+
 async function refreshStreams() {
   if (state.pageHidden) return;
   let data;
@@ -726,6 +970,29 @@ async function refreshStreams() {
   }
   updateSingleNav(candidates);
 
+  const single = state.settings.layout === '1x1';
+  const cols = single ? 1 : spec.cols;
+  const rows = single ? 1 : (spec.limit ? Math.ceil(spec.limit / spec.cols) : Math.max(1, Math.ceil(visible.length / spec.cols)));
+
+  // 原来这里每 5 秒无条件重设 grid 变量、重建空窗口、重算 fitGrid，
+  // 会强制整页重排一次；视频正在解码时就是肉眼可见的周期性卡顿。
+  // 布局与可见集合都没变化时直接跳过，只做不产生重排的轻量更新。
+  const gridSig = [
+    state.settings.layout, state.settings.box, state.settings.fit, cols, rows,
+    visible.join('|'), allNames.length, spec.limit || 0,
+    // 卡片数量也要进签名：清空 / 删除一路会先销毁卡片再回来重建，
+    // 只比对 names 与布局的话会漏掉这一种，导致画面空白。
+    state.cards.size,
+  ].join('#');
+  if (gridSig === lastGridSig) {
+    updateLayoutUI();
+    updateSettings();
+    renderRooms();
+    updateOnlineStatus();
+    return;
+  }
+  lastGridSig = gridSig;
+
   $('#grid').querySelectorAll('.grid-slot').forEach(el => el.remove());
 
   visible.forEach((name, i) => {
@@ -740,15 +1007,15 @@ async function refreshStreams() {
   }
 
   const grid = $('#grid');
-  const single = state.settings.layout === '1x1';
-  const cols = single ? 1 : spec.cols;
-  const rows = single ? 1 : (spec.limit ? Math.ceil(spec.limit / spec.cols) : Math.max(1, Math.ceil(visible.length / spec.cols)));
   grid.style.setProperty('--grid-cols', String(cols));
   grid.style.setProperty('--grid-rows', String(rows));
   grid.dataset.layout = state.settings.layout;
   grid.classList.toggle('single', single);
   grid.classList.toggle('fit', !single && state.settings.layout !== 'all');
-  grid.classList.toggle('fill', state.settings.display === 'fill');
+  // 「自适应」＝格子随窗口铺满（原来的「铺满窗口」）；16:9 / 4:3 则按比例排布
+  const ar = boxAspect();
+  grid.classList.toggle('fill', ar === 0);
+  grid.style.setProperty('--card-ar', ar === 4 / 3 ? '4 / 3' : '16 / 9');
 
   const hiddenCount = allNames.length - visible.length;
   $('#streamCount').textContent = hiddenCount
@@ -801,6 +1068,28 @@ function updateSettings() {
   if (regionEl) regionEl.textContent = regionName(state.region);
   const setRegion = $('#setRegion');
   if (setRegion) setRegion.textContent = regionName(state.region);
+}
+
+/* 设置项涨到十几条后一屏拉不完，按「显示 / 云台 / 其他」分成三页 */
+const SET_TABS = ['display', 'ptz', 'more'];
+
+function applySettingsTab(name) {
+  const tab = SET_TABS.includes(name) ? name : 'display';
+  state.settings.setTab = tab;
+  $$('#setTabs [data-set-tab]').forEach(b => {
+    const on = b.dataset.setTab === tab;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  });
+  $$('[data-set-pane]').forEach(p => { p.hidden = p.dataset.setPane !== tab; });
+}
+
+// 云台两项设置：方向镜像、轻点步长。纯本地，改完立即生效。
+function syncPtzSettingsUI() {
+  const flip = state.settings.ptzFlip || 'none';
+  $$('#ptzFlipSeg [data-flip]').forEach(b => b.classList.toggle('on', b.dataset.flip === flip));
+  const step = String(Math.round(Number(state.settings.ptzStep) || 1));
+  $$('#ptzStepSeg [data-step]').forEach(b => b.classList.toggle('on', b.dataset.step === step));
 }
 
 function tickClock() {
@@ -1113,6 +1402,7 @@ function createCard(name, delay = 0) {
       <span class="badge" data-role="badge">连接中</span>
     </div>
     <div class="card-media">
+      <div class="card-still" data-role="still" aria-hidden="true"></div>
       <div class="card-mask" data-role="mask">
         <div><div class="spinner"></div>正在建立局域网连接…</div>
       </div>
@@ -1150,6 +1440,7 @@ function createCard(name, delay = 0) {
     onChange: on => $('[data-act="zoom"]', card)?.classList.toggle('on', on),
   });
   const mask = $('[data-role="mask"]', card);
+  const still = $('[data-role="still"]', card);
   const badge = $('[data-role="badge"]', card);
   const signal = $('[data-role="signal"]', card);
   const heroSignal = $('[data-role="heroSignal"]', card);
@@ -1166,6 +1457,8 @@ function createCard(name, delay = 0) {
   let bgPaused = false;     // 后台休眠，回到前台自动恢复
   let startedAt = 0;
   let lastLiveAt = 0;
+  let lastStillAt = 0;      // 上次抓帧时间，用来定期刷新占位图
+  let slowHinted = false;   // 12 秒没出画时已经换过提示文案
   let phase = 'idle';
   let lastError = '';
 
@@ -1194,7 +1487,25 @@ function createCard(name, delay = 0) {
   }
 
   function spinnerMask() {
-    mask.innerHTML = '<div><div class="spinner"></div>正在建立局域网连接…</div>';
+    mask.innerHTML = '<div><div class="spinner"></div><span data-role="maskText">正在建立局域网连接…</span></div>';
+  }
+
+  // 占位图：切回来/重连时先看到上一帧，而不是一块黑
+  function showCardStill() {
+    const url = stillOf(name);
+    if (!url) {
+      still.classList.remove('on');
+      return;
+    }
+    if (still.dataset.url !== url) {
+      still.dataset.url = url;
+      still.style.backgroundImage = `url("${url}")`;
+    }
+    still.classList.add('on');
+  }
+
+  function hideCardStill() {
+    still.classList.remove('on');
   }
 
   function errorMask(title, detail, withLogin = false) {
@@ -1248,13 +1559,16 @@ function createCard(name, delay = 0) {
     startedAt = Date.now();
     lastLiveAt = 0;
     lastError = '';
+    slowHinted = false;
     setBadge('connecting');
     mask.classList.remove('hide');
     spinnerMask();
+    showCardStill();
     setSignal(0, '正在连接…');
 
     player = makePlayer(name, {
-      contain: false,
+      // 卡片里的视频按「填充方式」铺：铺满=裁切填满，完整=整幅显示留黑边
+      contain: state.settings.fit === 'contain',
       muted: state.muted,
       followGlobalMute: true,
       holdWhileViewer: true,
@@ -1268,6 +1582,9 @@ function createCard(name, delay = 0) {
         errorTimer = 0;
         setBadge('live');
         mask.classList.add('hide');
+        rememberStill(name, player.video);
+        lastStillAt = Date.now();
+        hideCardStill();
         if (state.viewer) {
           try { player?.video?.pause(); } catch {}
         }
@@ -1305,15 +1622,26 @@ function createCard(name, delay = 0) {
     timer = setInterval(() => {
       if (!player || suspended || state.pageHidden) return;
       const v = player.video;
+      const waited = Date.now() - (lastLiveAt || startedAt);
       if (v && v.readyState >= 2 && v.videoWidth > 0) {
         lastLiveAt = Date.now();
         setBadge('live');
         mask.classList.add('hide');
-      } else if (phase !== 'timeout' && Date.now() - (lastLiveAt || startedAt) > 30000) {
+        hideCardStill();
+        if (Date.now() - lastStillAt > 30000) {
+          lastStillAt = Date.now();
+          rememberStill(name, v);
+        }
+      } else if (phase !== 'timeout' && waited > 30000) {
         setBadge('timeout');
         mask.classList.remove('hide');
         lastError = lastError || '摄像头可能休眠或离线';
         scheduleRetry('连接超时');
+      } else if (waited > 12000 && !slowHinted) {
+        // 12 秒还没出画：先给个「还在等」的具体说法，别让用户以为卡死
+        slowHinted = true;
+        const tip = mask.querySelector('[data-role="maskText"]');
+        if (tip) tip.textContent = '连接较慢，正在重试…';
       }
     }, 1000);
   }
@@ -1463,6 +1791,16 @@ function createCard(name, delay = 0) {
   card.addEventListener('dblclick', ev => {
     if (document.body.classList.contains('wall')) return;
     if (ev.target.closest('[data-act]') || ev.target.closest('.card-mask')) return;
+    openViewer(name);
+  });
+
+  // 触屏上双击既难触发、又和缩放手势打架，回到单击进单画面；
+  // 桌面端维持原样（单击容易误开全屏）。
+  card.addEventListener('click', ev => {
+    if (!pointerCoarse()) return;
+    if (document.body.classList.contains('wall')) return;
+    if (ev.target.closest('[data-act], .card-tools, .card-menu-btn, .zoom-hud, .card-mask')) return;
+    viewerOpenedAt = performance.now();
     openViewer(name);
   });
 
@@ -1696,6 +2034,7 @@ function openViewer(name) {
   const stage = $('#viewerStage');
   stage._zoom?.destroy();
   stage.innerHTML = '';
+  showViewerStill(name);
 
   const cardVideo = state.cards.get(name)?.player?.video;
   const initialMuted = cardVideo ? cardVideo.muted : state.muted;
@@ -1704,10 +2043,15 @@ function openViewer(name) {
   let player;
   try {
     player = makePlayer(name, {
-      contain: state.settings.display === 'ratio',
+      contain: state.settings.fit === 'contain',
       muted: initialMuted,
       microphone: false,
-      onReady: () => setViewerState(true),
+      onReady: () => {
+        rememberStill(name, player.video);
+        hideViewerStill(name);
+        clearViewerWatch();
+        setViewerState(true);
+      },
       onError: () => setViewerState(false),
       onStatus: () => setViewerState(false),
     });
@@ -1726,6 +2070,7 @@ function openViewer(name) {
     muted: initialMuted,
   };
   state.viewer = viewer;
+  startViewerWatch(name);
   holdCardsForViewer();
   stage.appendChild(player.el);
   viewer.zoom = createZoom(stage, {
@@ -1740,9 +2085,12 @@ function openViewer(name) {
   $('#viewerSub').textContent = [meta.ip, live ? 'RTC' : '等待重连'].filter(Boolean).join(' · ');
   $('#btnViewerMute').innerHTML = icon(initialMuted ? 'i-muted' : 'i-volume');
   $('#btnViewerMute').classList.toggle('on', !initialMuted);
+  renderQualityButton(name);
 
   renderViewerChips();
   tickClock();
+  // 云台：只有 /ptz/spec 报告该型号支持时才会显示方向盘
+  ptzProbe(name);
 
   $('#modalViewer').classList.remove('chrome-off');
   $('#modalViewer').classList.add('open');
@@ -1787,6 +2135,77 @@ function closeViewer() {
 
   releaseCardsForViewer();
   setRecUI(false);
+  clearViewerWatch();
+  ptzReset();
+}
+
+/* ---------------------------------------------------------------- */
+/* 单画面：上一帧占位 + 首帧看门狗                                   */
+/* ---------------------------------------------------------------- */
+
+let viewerStillLast = '';   // 上一台看过的画面，目标没有存帧时兜底
+let viewerWatch = 0;
+
+function showViewerStill(name) {
+  const el = $('#viewerStill');
+  if (!el) return;
+  const url = stillOf(name) || viewerStillLast;
+  if (!url) {
+    el.classList.remove('on');
+    return;
+  }
+  if (el.dataset.url !== url) {
+    el.dataset.url = url;
+    el.style.backgroundImage = `url("${url}")`;
+  }
+  el.classList.add('on');
+}
+
+function hideViewerStill(name) {
+  const el = $('#viewerStill');
+  const url = stillOf(name);
+  if (url) viewerStillLast = url;
+  el?.classList.remove('on');
+}
+
+function clearViewerWatch() {
+  clearTimeout(viewerWatch);
+  viewerWatch = 0;
+  $('#viewerSlow')?.setAttribute('hidden', '');
+}
+
+// 12 秒还不出画就把「连接中」换成可操作的建议；
+// 无子码流的机型（比如母婴看护版）常见症状就是黑屏且没有兜底。
+function startViewerWatch(name) {
+  clearViewerWatch();
+  const startedAt = Date.now();
+  const tick = () => {
+    if (!state.viewer || state.viewer.name !== name) return;
+    const v = state.viewer.player?.video;
+    if (v && v.readyState >= 2 && v.videoWidth > 0) {
+      clearViewerWatch();
+      return;
+    }
+    const el = $('#viewerSlow');
+    const txt = $('#viewerSlowText');
+    if (!el || !txt) return;
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    const sd = state.meta[name]?.quality === 'sd';
+    // 已经是高清时说「换成高清」会自相矛盾，所以两种档位分开措辞
+    txt.textContent = secs >= 25
+      ? (sd
+        ? `已经等了 ${secs} 秒，当前走「流畅」。先试「改用高清」，还不行就回卡片看它是不是休眠或离线。`
+        : `已经等了 ${secs} 秒，当前已是「高清」。这台可能休眠或离线，也可能这一路暂时取不到视频。`)
+      : (sd
+        ? `已经等了 ${secs} 秒，当前走「流畅」。这台如果没有子码流，换成高清往往就能出画面。`
+        : `已经等了 ${secs} 秒，当前已是「高清」。无子码流的机型会慢一些，再等等或点重试。`);
+    // 已是高清时，那颗按钮点了也没意义，直接收起来只留「重试」
+    const hdBtn = el.querySelector('[data-slow="hd"]');
+    if (hdBtn) hdBtn.hidden = !sd;
+    el.removeAttribute('hidden');
+    viewerWatch = setTimeout(tick, 1000);
+  };
+  viewerWatch = setTimeout(tick, 12000);
 }
 
 // 单画面里单击画面：隐藏/显示顶部和底部控件（右上角菜单一起收起）
@@ -1807,16 +2226,27 @@ function recreateViewerPlayer({ microphone } = {}) {
   viewer.player.destroy();
   viewer.zoom?.destroy();
   viewer.zoom = null;
-  const player = makePlayer(viewer.name, {
-    contain: state.settings.display === 'ratio',
+  const name = viewer.name;
+  const player = makePlayer(name, {
+    contain: state.settings.fit === 'contain',
     muted: wasMuted,
     microphone: microphone ?? viewer.microphone,
+    onReady: () => {
+      rememberStill(name, player.video);
+      hideViewerStill(name);
+      clearViewerWatch();
+      setViewerState(true);
+    },
+    onError: () => setViewerState(false),
+    onStatus: () => setViewerState(false),
   });
   viewer.player = player;
   viewer.microphone = microphone ?? viewer.microphone;
   viewer.muted = wasMuted;
   $('#viewerStage').innerHTML = '';
   $('#viewerStage').appendChild(player.el);
+  showViewerStill(name);
+  startViewerWatch(name);
   viewer.zoom = createZoom($('#viewerStage'), {
     onChange: on => $('#btnViewerZoom')?.classList.toggle('on', on),
   });
@@ -1841,7 +2271,7 @@ function resumeViewerFromBackground() {
   if (!viewer || !viewer.bgSuspended) return;
   const muted = viewer.muted ?? state.muted;
   const player = makePlayer(viewer.name, {
-    contain: state.settings.display === 'ratio',
+    contain: state.settings.fit === 'contain',
     muted,
     microphone: viewer.microphone || false,
   });
@@ -2384,12 +2814,54 @@ function mergeDeviceMeta(sources) {
   if (changed) saveMeta();
 }
 
+function pickRows() {
+  return $$('#deviceList .device');
+}
+
+function pickBoxOf(row) {
+  return row ? $('.device-box', row) : null;
+}
+
+function pickVisible() {
+  return pickRows().filter(r => !r.classList.contains('pick-hide'));
+}
+
+function syncPickRow(row) {
+  const box = pickBoxOf(row);
+  if (box) row.classList.toggle('on', !!box.checked);
+}
+
+// 搜索只改变「看得见哪些」，不改变已勾选集合：先全选再搜出来取消几个，
+// 是这页最常见的用法，过滤时把勾选清掉会让人白选一遍。
+function applyPickFilter() {
+  const input = $('#pickSearch');
+  const q = (input ? input.value : '').trim().toLowerCase();
+  for (const row of pickRows()) {
+    const hit = !q || (row.dataset.search || '').toLowerCase().includes(q);
+    row.classList.toggle('pick-hide', !hit);
+  }
+  const empty = $('#pickEmpty');
+  if (empty) empty.hidden = !(pickRows().length > 0 && pickVisible().length === 0);
+  updateAddButton();
+}
+
 function renderDevices(sources) {
   const box = $('#deviceList');
   box.innerHTML = '';
 
+  const search = $('#pickSearch');
+  if (search) search.value = '';
+  const toolbar = $('#pickToolbar');
+  // 设备少的时候不摆全选/搜索，省两行空间
+  if (toolbar) toolbar.hidden = sources.length === 0;
+  const searchWrap = $('#pickSearchWrap');
+  if (searchWrap) searchWrap.hidden = sources.length < 5;
+  const empty = $('#pickEmpty');
+  if (empty) empty.hidden = true;
+
   if (!sources.length) {
-    box.innerHTML = '<div class="muted" style="padding:18px;text-align:center">没有摄像头</div>';
+    box.innerHTML = '<div class="pick-empty">这个账号下没有摄像头</div>';
+    updateAddButton();
     return;
   }
 
@@ -2400,19 +2872,29 @@ function renderDevices(sources) {
     const model = u.searchParams.get('model') || '';
     const name = 'cam_' + (did || Math.random().toString(36).slice(2, 8));
     const added = !!state.meta[name] || !!state.streams[name];
+    const title = source.name || '未命名摄像头';
+    const sub = [ip, model].filter(Boolean).join(' · ');
 
     const row = document.createElement('label');
     row.className = 'device';
+    // 名称 / IP / 型号都能搜到；型号用全名，短名会搜不着
+    row.dataset.search = [title, ip, model, name].join(' ');
     row.innerHTML = `
-      <input type="checkbox" ${added ? '' : 'checked'} value="${escapeHTML(name)}">
-      <div class="device-text">
-        <b>${escapeHTML(source.name || '未命名摄像头')}</b>
-        <span>${escapeHTML([ip, shortModel(model)].filter(Boolean).join(' · '))}</span>
-      </div>
-      <span class="tag ${added ? 'added' : ''}">${added ? '已添加' : escapeHTML(shortModel(model))}</span>
+      <input type="checkbox" class="device-box" ${added ? '' : 'checked'} value="${escapeHTML(name)}">
+      <span class="device-tick"><svg class="ic"><use href="#i-check"/></svg></span>
+      <span class="device-text">
+        <b>${escapeHTML(title)}</b>
+        <span class="device-sub">${escapeHTML(sub || '地址未知')}</span>
+      </span>
+      ${added ? '<span class="device-badge">已添加</span>' : ''}
     `;
     row.dataset.source = JSON.stringify({ ...source, did, ip, mac, streamName: name });
-    row.querySelector('input').addEventListener('change', updateAddButton);
+    const input = $('.device-box', row);
+    input.addEventListener('change', () => {
+      syncPickRow(row);
+      updateAddButton();
+    });
+    syncPickRow(row);
     box.appendChild(row);
   }
 
@@ -2420,9 +2902,30 @@ function renderDevices(sources) {
 }
 
 function updateAddButton() {
-  const checked = $$('#deviceList input:checked').length;
-  $('#btnAddSelected').disabled = checked === 0;
-  $('#btnAddSelected').textContent = checked ? `添加选中摄像头（${checked}）` : '添加选中摄像头';
+  const rows = pickRows();
+  const boxes = rows.map(pickBoxOf).filter(Boolean);
+  const checked = boxes.filter(b => b.checked).length;
+
+  const btn = $('#btnAddSelected');
+  if (btn) {
+    btn.disabled = checked === 0;
+    btn.textContent = checked ? `添加选中摄像头（${checked}）` : '添加选中摄像头';
+  }
+
+  const count = $('#pickCount');
+  if (count) count.textContent = `已选 ${checked} / ${rows.length}`;
+
+  // 全选只作用于当前可见（搜索过滤后）的行，文字跟着状态变，省一次点击
+  const allBtn = $('#btnPickAll');
+  if (allBtn) {
+    const vis = pickVisible().map(pickBoxOf).filter(Boolean);
+    const allOn = vis.length > 0 && vis.every(b => b.checked);
+    allBtn.textContent = allOn ? '全不选' : '全选';
+    allBtn.disabled = vis.length === 0;
+  }
+
+  const noneBtn = $('#btnPickNone');
+  if (noneBtn) noneBtn.disabled = checked === 0;
 }
 
 async function addSelected() {
@@ -2494,6 +2997,17 @@ function updateCardQuality(name) {
   $$('[data-quality-label]', card.el).forEach(el => { el.textContent = label; });
 }
 
+// 单画面右上角那颗按钮直接显示当前画质（高清/流畅），点一下切到另一档。
+// 原来是一个写着「画质」的弹层入口：弱网时看不出自己在哪一档，还要多点一次。
+function renderQualityButton(name = state.viewer?.name) {
+  const btn = $('#btnViewerQuality');
+  if (!btn) return;
+  const sd = !!name && state.meta[name]?.quality === 'sd';
+  btn.textContent = sd ? '流畅' : '高清';
+  btn.classList.toggle('on', sd);
+  btn.title = sd ? '当前「流畅」，点击切到高清' : '当前「高清」，点击切到流畅';
+}
+
 async function applyQuality(name, q, silent = false) {
   const info = streamInfo(name);
   const meta = state.meta[name] || (state.meta[name] = {
@@ -2533,6 +3047,7 @@ async function applyQuality(name, q, silent = false) {
     state.cards.get(name)?.reload();
     if (viewer) recreateViewerPlayer();
     updateCardQuality(name);
+    renderQualityButton(name);
     if (!silent) toast(q === 'sd' ? '已切换到流畅画质，正在重连' : '已切换到高清画质，正在重连');
     return true;
   } catch (e) {
@@ -2596,12 +3111,15 @@ function openSettings() {
   updateLayoutUI();
   applyTheme(themeMode(), false);
   $('#setLayout').value = LAYOUTS[state.settings.layout] ? state.settings.layout : '2x2';
-  $('#setDisplay').value = state.settings.display === 'fill' ? 'fill' : 'ratio';
   $('#setHideBattery').checked = state.settings.hideBattery !== false;
   $('#setKeepAlive').checked = state.settings.keepAlive !== false;
   $('#setBgSleep').checked = state.settings.bgSleep !== false;
+  applySettingsTab(state.settings.setTab);
+  syncPtzSettingsUI();
   $('#modalSettings').classList.add('open');
   $('#modalSettings').setAttribute('aria-hidden', 'false');
+  // 打开设置就重算一次外观判定，顺带把读数刷新出来
+  resyncAutoTheme();
   document.body.style.overflow = 'hidden';
 }
 
@@ -2673,13 +3191,50 @@ function bindEvents() {
   $$('#themeSeg [data-theme]').forEach(btn => {
     btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
   });
-  $$('#displaySeg [data-display]').forEach(btn => {
+  $$('#boxSeg [data-box]').forEach(btn => {
     btn.addEventListener('click', () => {
-      state.settings.display = btn.dataset.display === 'fill' ? 'fill' : 'ratio';
+      state.settings.box = btn.dataset.box;
+      // 自适应不需要黑边，切过去时把填充一起归位，省得用户再点一次
+      if (state.settings.box !== 'auto') state.settings.fit = 'cover';
       saveSettings();
       updateLayoutUI();
+      applyFitLive();
       refreshStreams();
     });
+  });
+  $$('#fitSeg [data-fit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.settings.fit = btn.dataset.fit;
+      saveSettings();
+      updateLayoutUI();
+      applyFitLive();
+      refreshStreams();
+    });
+  });
+  $$('#setTabs [data-set-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      applySettingsTab(btn.dataset.setTab);
+      saveSettings();
+    });
+  });
+  $$('#ptzFlipSeg [data-flip]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.settings.ptzFlip = btn.dataset.flip;
+      saveSettings();
+      syncPtzSettingsUI();
+      haptic(8);
+    });
+  });
+  $$('#ptzStepSeg [data-step]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.settings.ptzStep = Number(btn.dataset.step) || 1;
+      saveSettings();
+      syncPtzSettingsUI();
+      haptic(8);
+    });
+  });
+  [['#setVersion', '引擎版本'], ['#setUser', '账号'], ['#setRegion', '区域']].forEach(([sel, label]) => {
+    $(sel)?.addEventListener('click', () => copyText($(sel).textContent, label));
   });
 
   $('#roomList').addEventListener('click', ev => {
@@ -2785,6 +3340,22 @@ function bindEvents() {
   });
 
   $('#btnAddSelected').addEventListener('click', addSelected);
+  $('#btnPickAll').addEventListener('click', () => {
+    const vis = pickVisible().map(pickBoxOf).filter(Boolean);
+    const allOn = vis.length > 0 && vis.every(b => b.checked);
+    vis.forEach(b => { b.checked = !allOn; });
+    pickRows().forEach(syncPickRow);
+    updateAddButton();
+  });
+  $('#btnPickNone').addEventListener('click', () => {
+    pickRows().forEach(row => {
+      const b = pickBoxOf(row);
+      if (b) b.checked = false;
+    });
+    pickRows().forEach(syncPickRow);
+    updateAddButton();
+  });
+  $('#pickSearch').addEventListener('input', applyPickFilter);
   $('#btnRelogin').addEventListener('click', () => {
     state.user = '';
     localStorage.removeItem('imi.user');
@@ -2803,15 +3374,10 @@ function bindEvents() {
   });
   $('#btnSinglePrev').addEventListener('click', () => stepSingle(-1));
   $('#btnSingleNext').addEventListener('click', () => stepSingle(1));
+  bindSwipeSwitch();
   $('#singleSelect').addEventListener('change', () => {
     state.settings.single = $('#singleSelect').value;
     saveSettings();
-    refreshStreams();
-  });
-  $('#setDisplay').addEventListener('change', () => {
-    state.settings.display = $('#setDisplay').value === 'fill' ? 'fill' : 'ratio';
-    saveSettings();
-    updateLayoutUI();
     refreshStreams();
   });
   $('#setHideBattery').addEventListener('change', () => {
@@ -2902,6 +3468,8 @@ function bindEvents() {
     if (isViewerControl(ev.target)) return;
 
     const now = performance.now();
+    // 刚用单击打开时，手指第二下会落在这里；不忽略的话画面刚进来就收起工具栏
+    if (now - viewerOpenedAt < 400) return;
     const isDouble = now - lastTapAt < 300
       && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 44;
     if (isDouble) {
@@ -2932,11 +3500,28 @@ function bindEvents() {
 
   $('#btnViewerQuality').addEventListener('click', ev => {
     ev.stopPropagation();
-    $('#qualityMenu').classList.toggle('open');
+    const name = state.viewer?.name;
+    if (!name) return;
+    const cur = state.meta[name]?.quality === 'sd' ? 'sd' : 'hd';
+    changeQuality(cur === 'sd' ? 'hd' : 'sd');
   });
   $$('#qualityMenu button').forEach(btn => {
     btn.addEventListener('click', () => changeQuality(btn.dataset.q));
   });
+  $('#viewerSlow')?.addEventListener('click', ev => {
+    const act = ev.target.closest('[data-slow]')?.dataset.slow;
+    const name = state.viewer?.name;
+    if (!act || !name) return;
+    clearViewerWatch();
+    if (act === 'hd') {
+      changeQuality('hd');
+    } else if (act === 'retry') {
+      recreateViewerPlayer();
+      showViewerStill(name);
+      startViewerWatch(name);
+    }
+  });
+
   document.addEventListener('click', ev => {
     if (!ev.target.closest('.layout-wrap')) closeLayoutMenu();
     if (!ev.target.closest('.card-menu-btn') && !ev.target.closest('.card-tools')) {
@@ -3114,6 +3699,16 @@ async function init() {
     saveSettings();
   }
 
+  // uiVersion 3：把「画面比例」拆成两个独立概念。老语义里 16:9 一直连着「不裁切」、
+  // 铺满连着「自适应」，按原样迁移过来，用户升级后看到的画面不变。
+  if (savedSettings.uiVersion !== 3) {
+    const wasRatio = state.settings.display === 'ratio';
+    state.settings.box = wasRatio ? '16:9' : 'auto';
+    state.settings.fit = wasRatio ? 'contain' : 'cover';
+    state.settings.uiVersion = 3;
+    saveSettings();
+  }
+
   if (state.settings.layout === 'all') state.settings.layout = '3x3';
   if (!['1x1', '2x2', '3x2', '3x3'].includes(state.settings.layout)) state.settings.layout = '1x1';
   if (state.settings.layout !== '1x1') state.settings.gridLayout = state.settings.layout;
@@ -3162,6 +3757,281 @@ async function init() {
   window.addEventListener('resize', () => fitGrid(state.cards.size));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (themeMode() === 'auto') applyTheme('auto', false);
+  });
+  // WebView 不派发 change 时的兜底
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) resyncAutoTheme(); });
+  window.addEventListener('pageshow', resyncAutoTheme);
+  window.addEventListener('focus', resyncAutoTheme);
+  ptzBind();
+}
+
+/* ------------------------------------------------------------------ */
+/* 云台（PTZ）                                                          */
+/* ------------------------------------------------------------------ */
+
+// 只在与网关同源时可用：APK / fnOS 版网关以 -qr 启动，才会注册 /ptz。
+// 桌面版和 NAS 代理模式下 /ptz/spec 返回 404，方向盘自动不出现。
+const ptz = {
+  name: '',        // go2rtc 的流名，命令靠它定位到哪台摄像机
+  did: '',
+  dirs: [],
+  model: '',
+  channel: '',     // miss = 视频连接里的命令通道；cloud = MIoT 云端
+  note: '',
+  probing: 0,
+  pressTimer: 0,
+  repeatTimer: 0,
+  holdTimer: 0,
+  lastErrorAt: 0,
+  stopTimer: 0,    // 松手后延迟发停止的句柄（步长余量）
+};
+
+// 长按上限：手指滑出屏幕没收到 pointerup 时，靠它保证电机不会一直转。
+const PTZ_HOLD_MAX = 15000;
+// 按住时的补发间隔。命令本身是「持续朝该方向转」，补发不会加速；
+// 万一某个固件把它当步进，700ms 一步也不至于堆积（约 1.4s 是
+// 「命令发出 → 画面真的动」的延迟，不是步进间隔）。
+const PTZ_REPEAT_MS = 700;
+
+// 步长 = 松手后「再多走一小段」的时长。0x112 的 operation 是「持续朝
+// 该方向转」，一步走多远取决于停止命令发得多晚 —— 所以档位调的是延迟，
+// 不是连发几条（连发会被松手刹车直接掐掉，档位等于没有）。
+const PTZ_STEP_DELAY = { 1: 0, 2: 170, 3: 380 };
+
+// 吊装 / 倒装时画面是正的，方向键却是反的。按语义做镜像即可，
+// 网关和摄像机都不用改 —— 它们只认 operation 1..4。
+function ptzFlipDir(dir) {
+  const flip = state.settings.ptzFlip || 'none';
+  if (flip === 'none' || !dir) return dir;
+  let h = '';
+  let v = '';
+  String(dir).split('_').forEach((part) => {
+    if (part === 'up' || part === 'down') v = part;
+    else if (part === 'left' || part === 'right') h = part;
+  });
+  if (flip.includes('h')) h = h === 'left' ? 'right' : h === 'right' ? 'left' : h;
+  if (flip.includes('v')) v = v === 'up' ? 'down' : v === 'down' ? 'up' : v;
+  if (v && h) return h + '_' + v;
+  return v || h || dir;
+}
+
+function ptzStepMs() {
+  const n = Math.round(Number(state.settings.ptzStep) || 1);
+  return PTZ_STEP_DELAY[n] ?? 0;
+}
+
+// 让电机停下来。切画面、收起方向盘、松手都要走这里。
+function ptzSendStop(name) {
+  const target = name || ptz.name;
+  if (!target || ptz.channel !== 'miss') return;
+  const q = new URLSearchParams({ name: target, move: 'stop', region: state.region || 'cn' });
+  if (ptz.did) q.set('did', ptz.did);
+  if (state.user) q.set('id', state.user);
+  // 不 await：这是收尾动作，失败也不该阻塞切画面
+  fetch('/ptz?' + q.toString(), { cache: 'no-store', keepalive: true }).catch(() => {});
+}
+
+function ptzReset() {
+  clearTimeout(ptz.stopTimer);
+  ptz.stopTimer = 0;
+  const wasOn = $$('.ptz-btn.on', $('#ptzPad')).length > 0;
+  if (wasOn) ptzSendStop();
+  ptz.probing++;
+  ptz.name = '';
+  ptz.did = '';
+  ptz.dirs = [];
+  ptz.model = '';
+  ptz.channel = '';
+  ptz.note = '';
+  clearTimeout(ptz.pressTimer);
+  clearInterval(ptz.repeatTimer);
+  clearTimeout(ptz.holdTimer);
+  ptz.pressTimer = ptz.repeatTimer = ptz.holdTimer = 0;
+  ptzRender();
+}
+
+function ptzRender() {
+  const pad = $('#ptzPad');
+  const toggle = $('#ptzToggle');
+  if (!pad || !toggle) return;
+  const supported = ptz.dirs.length >= 4;
+  const key = ptz.did || ptz.name;
+  const collapsed = supported && key && state.settings.ptzHidden === key;
+  pad.hidden = !supported || collapsed;
+  toggle.hidden = !supported || !collapsed;
+  // 方向盘压着底部提示条：挂个标记让 toast 抬到它上方（见 body.ptz-on）
+  document.body.classList.toggle('ptz-on', !pad.hidden);
+  if (!supported) return;
+  // 斜向不是所有型号都有对应取值，规格里没有的直接不显示
+  $$('.ptz-btn', pad).forEach(btn => {
+    btn.hidden = !ptz.dirs.includes(btn.dataset.move);
+  });
+}
+
+const ptzWarned = new Set();   // 同一型号只提示一次，别反复弹
+
+// 规格要联网问 miot-spec.org，同一台反复进出单画面没必要重查
+const ptzSpecCache = new Map();      // key -> { at, data }
+const PTZ_SPEC_TTL = 10 * 60 * 1000;
+
+function ptzApplySpec(data) {
+  const spec = data.spec || {};
+  ptz.model = data.model || '';
+  ptz.note = spec.note || '';
+  ptz.channel = spec.channel || '';
+  // 后端已经按通道算过 supported：规格里有云台动作走云端，
+  // 没有则走视频连接里的命令通道（这批摄像机的真实路径）。
+  ptz.dirs = spec.supported && Array.isArray(spec.dirs) ? spec.dirs : [];
+}
+
+async function ptzProbe(name) {
+  ptz.probing++;
+  ptz.name = name || '';
+  ptz.did = name ? streamDid(name) : '';
+  ptz.dirs = [];
+  ptz.model = '';
+  ptz.channel = '';
+  ptz.note = '';
+  ptzRender();
+  if (!ptz.name) return;
+
+  const seq = ptz.probing;
+  const key = ptz.did || ptz.name;
+  const hit = ptzSpecCache.get(key);
+  if (hit && Date.now() - hit.at < PTZ_SPEC_TTL) {
+    ptzApplySpec(hit.data);
+    ptzRender();
+    return;
+  }
+
+  const q = new URLSearchParams({ name: ptz.name, region: state.region || 'cn' });
+  if (ptz.did) q.set('did', ptz.did);
+  if (state.user) q.set('id', state.user);
+  try {
+    const res = await fetch('/ptz/spec?' + q.toString(), { cache: 'no-store' });
+    if (seq !== ptz.probing) return;            // 已经切到别的摄像头了
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) return;
+    ptzSpecCache.set(key, { at: Date.now(), data });
+    ptzApplySpec(data);
+  } catch {
+  }
+  if (seq === ptz.probing) ptzRender();
+}
+
+// 云台失败原因五花八门，直接把后端原文弹出来会是一条带着
+// 127.0.0.1:xxxxx 和 Go 运行时措辞的长串 —— 用户看不懂，还挡住画面。
+// 归成几句人话，兜底也截断。
+function ptzErrText(msg) {
+  const m = String(msg || '').trim();
+  if (/timeout|deadline|没有响应|request canceled|EOF/i.test(m)) {
+    return '云台指令没送出去，重连一下画面再试';
+  }
+  if (/还没连上|409/.test(m)) return '画面还没连上摄像机，等画面出来再按';
+  if (/没有云台命令接口|405/.test(m)) return '这个播放引擎不带云台命令，需要新版';
+  if (/这个画面|404/.test(m)) return '画面名对不上，刷新一下再试';
+  if (!m) return '云台指令失败';
+  const one = m.split('\n')[0];
+  return one.length > 48 ? one.slice(0, 48) + '…' : one;
+}
+
+async function ptzMove(dir) {
+  if (!ptz.name) return;
+  const real = ptzFlipDir(dir);        // 吊装/倒装时把方向镜像回去
+  const pad = $('#ptzPad');
+  const q = new URLSearchParams({ name: ptz.name, move: real, region: state.region || 'cn' });
+  if (ptz.did) q.set('did', ptz.did);
+  if (state.user) q.set('id', state.user);
+  pad?.classList.add('busy');
+  try {
+    const res = await fetch('/ptz?' + q.toString(), { cache: 'no-store' });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    haptic(8);
+  } catch (e) {
+    // 长按会连续发指令，失败只提示一次，避免刷屏
+    if (Date.now() - ptz.lastErrorAt > 4000) {
+      ptz.lastErrorAt = Date.now();
+      toast(ptzErrText(e.message), true);
+    }
+  } finally {
+    pad?.classList.remove('busy');
+  }
+}
+
+function ptzBind() {
+  const pad = $('#ptzPad');
+  const toggle = $('#ptzToggle');
+  const collapse = $('#ptzCollapse');
+  if (!pad) return;
+
+  // 松手要补一条停止：0x112 的 operation 1..4 在多数固件上是
+  // 「持续朝该方向转」，不补停止会一路转到限位。
+  // immediate：15 秒兜底、切后台这种必须马上停；松手则留出步长余量
+  const stop = (immediate) => {
+    const had = $$('.ptz-btn.on', pad).length > 0;
+    clearTimeout(ptz.pressTimer);
+    clearInterval(ptz.repeatTimer);
+    clearTimeout(ptz.holdTimer);
+    ptz.pressTimer = ptz.repeatTimer = ptz.holdTimer = 0;
+    $$('.ptz-btn.on', pad).forEach(b => b.classList.remove('on'));
+    if (!had) return;
+    clearTimeout(ptz.stopTimer);
+    ptz.stopTimer = 0;
+    const delay = immediate ? 0 : ptzStepMs();
+    if (delay <= 0) {
+      ptzSendStop();
+    } else {
+      // 松手到真正停之间就是「一步」的长度，档位越大这一段越长
+      ptz.stopTimer = setTimeout(() => { ptz.stopTimer = 0; ptzSendStop(); }, delay);
+    }
+  };
+
+  pad.addEventListener('pointerdown', e => {
+    if (e.button !== undefined && e.button > 0) return;
+    const btn = e.target.closest('.ptz-btn');
+    if (!btn || btn.hidden) return;
+    e.preventDefault();
+    try { btn.setPointerCapture(e.pointerId); } catch {}
+    const dir = btn.dataset.move;
+
+    // 手指从一个方向滑到另一个：先把上一个停掉，否则两个方向会叠在一起
+    $$('.ptz-btn.on', pad).forEach(b => { if (b !== btn) b.classList.remove('on'); });
+    clearTimeout(ptz.stopTimer);      // 上一次松手还没落地的停止命令作废
+    ptz.stopTimer = 0;
+    clearTimeout(ptz.pressTimer);
+    clearInterval(ptz.repeatTimer);
+    clearTimeout(ptz.holdTimer);
+
+    btn.classList.add('on');
+    haptic(10);
+    ptzMove(dir);
+
+    // 按住继续转：先等 700ms（轻点只走一下），到点先补一次再起定时器，
+    // 否则第一次要等到 2×700ms 才发，手感像卡住了
+    ptz.pressTimer = setTimeout(() => {
+      ptzMove(dir);
+      ptz.repeatTimer = setInterval(() => ptzMove(dir), PTZ_REPEAT_MS);
+    }, PTZ_REPEAT_MS);
+
+    // 兜底：手指滑出屏幕时可能收不到 pointerup，别让电机一直转
+    ptz.holdTimer = setTimeout(() => stop(true), PTZ_HOLD_MAX);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']
+    .forEach(ev => pad.addEventListener(ev, () => stop(false)));
+  pad.addEventListener('contextmenu', e => e.preventDefault());
+  // 切后台 / 锁屏时收不到 pointerup：不补这一条，电机会一直转到限位
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(true); });
+
+  toggle?.addEventListener('click', () => {
+    state.settings.ptzHidden = '';
+    saveSettings();
+    ptzRender();
+  });
+  collapse?.addEventListener('click', () => {
+    state.settings.ptzHidden = ptz.did || ptz.name;
+    saveSettings();
+    ptzRender();
   });
 }
 

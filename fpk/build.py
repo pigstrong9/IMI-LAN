@@ -94,26 +94,40 @@ def extract_source(src_tar: Path) -> Path:
     return roots[0]
 
 
+LOGIN_PATCH = "xiaomi-login.patch"
+
+
+def patch_files() -> list[Path]:
+    """返回所有补丁。xiaomi-login 必须第一个应用：它改的是认证与配置，
+    xiaomi-control 依赖它引入的凭据结构。"""
+    files = sorted((FPK / "patches").glob("*.patch"))
+    return sorted(files, key=lambda p: (p.name != LOGIN_PATCH, p.name))
+
+
 def apply_patch(src_dir: Path) -> None:
-    patch_file = FPK / "patches" / "xiaomi-login.patch"
-    if not patch_file.exists():
-        die(f"missing patch: {patch_file}")
+    files = patch_files()
+    if not files:
+        die(f"no patch found in {FPK / 'patches'}")
     env = os.environ.copy()
     env.setdefault("LC_ALL", "C")
-    for cmd in (
-        ["patch", "-p1", "--forward", "--batch", "-i", str(patch_file)],
-        ["git", "apply", "-p1", "--whitespace=nowarn", str(patch_file)],
-    ):
-        exe = shutil.which(cmd[0])
-        if not exe:
-            continue
-        info(f"applying xiaomi login patch with {cmd[0]}")
-        res = subprocess.run([exe, *cmd[1:]], cwd=src_dir, env=env,
-                             capture_output=True, text=True)
-        if res.returncode == 0:
-            return
-        print(res.stdout, res.stderr, file=sys.stderr)
-    die("could not apply fpk/patches/xiaomi-login.patch")
+    for patch_file in files:
+        applied = False
+        for cmd in (
+            ["patch", "-p1", "--forward", "--batch", "-i", str(patch_file)],
+            ["git", "apply", "-p1", "--whitespace=nowarn", str(patch_file)],
+        ):
+            exe = shutil.which(cmd[0])
+            if not exe:
+                continue
+            info(f"applying {patch_file.name} with {cmd[0]}")
+            res = subprocess.run([exe, *cmd[1:]], cwd=src_dir, env=env,
+                                 capture_output=True, text=True)
+            if res.returncode == 0:
+                applied = True
+                break
+            print(res.stdout, res.stderr, file=sys.stderr)
+        if not applied:
+            die(f"could not apply {patch_file}")
 
 
 def go_env(goos: str = "linux", goarch: str = "amd64") -> dict[str, str]:
@@ -123,7 +137,9 @@ def go_env(goos: str = "linux", goarch: str = "amd64") -> dict[str, str]:
         "GOARCH": goarch,
         "CGO_ENABLED": "0",
         "GO111MODULE": "on",
-        "GOTOOLCHAIN": "local",
+        # go2rtc 1.9.15 的 go.mod 要求 go 1.26，写死 local 会直接拒绝编译。
+        # auto 让它按各自的 go.mod 选工具链：网关自己只要 1.21，不受影响。
+        "GOTOOLCHAIN": os.environ.get("GOTOOLCHAIN", "auto"),
         "GOCACHE": str(BUILD / "gocache"),
         "GOMODCACHE": str(BUILD / "gomodcache"),
     })

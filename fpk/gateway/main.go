@@ -240,6 +240,7 @@ func main() {
 		}
 		qr := newQRService(*configPath, *go2rtcAddr, *go2rtcUser, *go2rtcPass, filepath.Join(qrLog, "qr-login.log"))
 		qr.register(mux)
+		qr.registerPTZ(mux)
 	} else {
 		mux.Handle("/qr", helperProxy)
 		mux.Handle("/qr/", helperProxy)

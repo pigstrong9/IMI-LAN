@@ -1150,6 +1150,8 @@ type deviceInfo struct {
 	DID    string `json:"did"`
 	Room   string `json:"room"`
 	Online bool   `json:"online"`
+	// Model 让前端能判断这台设备是否支持云台（并显示型号）
+	Model string `json:"model,omitempty"`
 }
 
 type totalInfo struct {
@@ -1308,7 +1310,7 @@ func (s *qrService) loadRooms(user, region, key string) (*roomsData, error) {
 		if room == "" {
 			room = "未分配房间"
 		}
-		devices = append(devices, deviceInfo{DID: did, Room: room, Online: online})
+		devices = append(devices, deviceInfo{DID: did, Room: room, Online: online, Model: strOf(d["model"])})
 		if _, ok := roomMap[room]; !ok {
 			roomMap[room] = &roomInfo{Name: room}
 			roomOrder = append(roomOrder, room)

@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <!--
+      日间主题：必须用 Light 父主题。AppTheme 只有深色父主题时，WebView 的
+      prefers-color-scheme 会一直返回 dark，网页里的「外观 → 自动」就永远跟不到手机。
+      夜间对应资源在 values-night/themes.xml。
+    -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/splash_background</item>
         <item name="android:statusBarColor">@color/splash_background</item>
         <item name="android:navigationBarColor">@color/splash_background</item>
-        <item name="android:colorAccent">#4C9AFF</item>
+        <item name="android:colorAccent">#1F66E0</item>
+        <!-- 浅色底要用深色状态栏图标，否则白图标看不见 -->
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

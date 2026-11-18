@@ -5,7 +5,9 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -69,6 +71,7 @@ class MainActivity : Activity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setupEdgeToEdge()
         applySystemBarInsets()
+        applyDarkChrome(isNightMode())
         askNotificationPermission()
 
         setupWebView()
@@ -129,9 +132,72 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun isNightMode(): Boolean =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    /**
+     * manifest 里把 uiMode 交给 Activity 自己处理，切系统深浅色时页面不会重建。
+     * 这里手动同步三件事：壳的底色、系统栏图标的明暗、网页的「自动」模式，
+     * 否则要杀进程重开才跟得上。
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val night = (newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        // 已经挂上网页时不要自己算：网页若是「手动暗色」，推过去之后它会用
+        // setDarkChrome 回推真实外观，这里先按系统算反而会闪一帧错误底色。
+        if (!loaded) applyDarkChrome(night)
+        if (::web.isInitialized) {
+            // WebView 的 prefers-color-scheme 在「自己处理 uiMode」时不一定跟着变，
+            // 所以把壳的判定直接推给网页，网页拿这个值时会优先于 matchMedia。
+            web.evaluateJavascript(
+                "window.__imiSetSystemDark && window.__imiSetSystemDark(" +
+                    (if (night) "true" else "false") + ");" +
+                    "window.__imiResyncTheme && window.__imiResyncTheme()",
+                null,
+            )
+        }
+    }
+
+    /**
+     * 深色底要浅色图标、浅色底要深色图标，并且状态栏下面那条底色也要跟着换。
+     *
+     * 那条底色的真实来源是 Activity 的 window 背景 + layout 根布局的
+     * android:background（都是 @color/splash_background）。Activity 不重建时
+     * 这两处资源都还是切换前的取值，于是真机上会出现「页面底色变了、手机状态栏没变」。
+     * 所以这里把 window / root / WebView 的底色一起显式覆盖，图标明暗另外翻。
+     */
+    @Suppress("DEPRECATION")
+    private fun applyDarkChrome(night: Boolean) {
+        val bg = Color.parseColor(if (night) "#071018" else "#EDF2F7")
+        window.setBackgroundDrawable(ColorDrawable(bg))
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
+        if (::root.isInitialized) {
+            root.setBackgroundColor(bg)
+            overlay.setBackgroundColor(bg)
+            status.setTextColor(Color.parseColor(if (night) "#E6EEF8" else "#162233"))
+        }
+        if (::web.isInitialized) {
+            web.setBackgroundColor(bg)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (night) 0 else light, light)
+            return
+        }
+        val lightFlag = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        var flags = window.decorView.systemUiVisibility
+        flags = if (night) flags and lightFlag.inv() else flags or lightFlag
+        window.decorView.systemUiVisibility = flags
+    }
+
     private fun setupWebView() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-        web.setBackgroundColor(Color.parseColor("#0E1726"))
+        // 底色跟着当前主题走，否则浅色模式下网页加载瞬间会闪一块深蓝
+        web.setBackgroundColor(Color.parseColor(if (isNightMode()) "#0E1726" else "#EDF2F7"))
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -294,6 +360,23 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (on) hideSystemBars() else showSystemBars()
             }
+        }
+
+        /**
+         * 网页「外观 → 自动」直接问壳要系统深浅色。configChanges 接管 uiMode 之后
+         * WebView 的 prefers-color-scheme 可能一直停在旧值，靠它判断会看着像没生效。
+         */
+        @JavascriptInterface
+        fun isNightMode(): Boolean = this@MainActivity.isNightMode()
+
+        /**
+         * 网页按「实际生效的外观」通知壳换底色。
+         * 网页里手动选「暗色」时手机还是浅色模式，壳只按 isNightMode() 判断会把
+         * 状态栏那条留成白色，和暗色页面拼在一起非常割裂——真机反馈的就是这个。
+         */
+        @JavascriptInterface
+        fun setDarkChrome(night: Boolean) {
+            runOnUiThread { applyDarkChrome(night) }
         }
     }
 

@@ -68,8 +68,14 @@ def load_fpk_build():
 
 def ensure_source(fpk) -> Path:
     """Download, extract and patch go2rtc once; redo it when the patch file changes."""
-    patch = ROOT / "fpk" / "patches" / "xiaomi-login.patch"
-    patch_hash = hashlib.sha256(patch.read_bytes()).hexdigest()
+    # 补丁目录里可能有多个补丁（xiaomi-login + xiaomi-control），
+    # 哈希要把它们全算进去，否则改了后加的补丁仍会复用旧源码树。
+    patches = sorted((ROOT / "fpk" / "patches").glob("*.patch"))
+    digest = hashlib.sha256()
+    for item in patches:
+        digest.update(item.name.encode())
+        digest.update(item.read_bytes())
+    patch_hash = digest.hexdigest()
     src = fpk.BUILD / f"go2rtc-{fpk.GO2RTC_VERSION}" / f"go2rtc-{fpk.GO2RTC_VERSION}"
     marker = src / ".imi-patched"
     # 只判断标记存在会让补丁更新后继续复用旧树；标记里记补丁哈希

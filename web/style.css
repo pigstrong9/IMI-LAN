@@ -429,7 +429,8 @@ body.wall .grid { grid-template-rows: none !important; }
 
 .card-media {
   position: relative;
-  aspect-ratio: 16 / 9;
+  /* 由 JS 按「窗口比例」写入；自适应布局下这条被子网格的 flex 规则覆盖 */
+  aspect-ratio: var(--card-ar, 16 / 9);
   background: #04080d;
   overflow: hidden;
 }
@@ -756,7 +757,14 @@ body.wall .grid { grid-template-rows: none !important; }
 .viewer-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 10px; background: rgba(7, 12, 19, 0.58); backdrop-filter: blur(10px); }
 .viewer-actions .icon-btn { color: rgba(255, 255, 255, 0.82); }
 .viewer-actions .icon-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: transparent; color: #fff; }
-.quality-btn { height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: rgba(255, 255, 255, 0.82); font-size: 10.5px; }
+.quality-btn {
+  /* 和两侧的 .icon-btn 同高同圆角，否则并排时高矮不齐很明显 */
+  height: 32px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: rgba(255, 255, 255, 0.82);
+  font-size: 11px; font-weight: 500; letter-spacing: 0.01em;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 .quality-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 
 .quality-menu {
@@ -839,7 +847,7 @@ body.wall .grid { grid-template-rows: none !important; }
 .small { font-size: 11px; }
 .step { display: none; }
 .step.on { display: block; }
-.step-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-right: 36px; }
+.step-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-right: 44px; }
 
 .login-tabs { display: flex; gap: 4px; margin: 18px 0 16px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .login-tab { flex: 1; padding: 8px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; }
@@ -874,15 +882,40 @@ body.wall .grid { grid-template-rows: none !important; }
 .captcha { width: 100%; max-width: 230px; border-radius: 8px; background: #fff; image-rendering: pixelated; }
 .steps { min-height: 100px; }
 
-.device-list { margin: 16px 0 12px; display: grid; gap: 7px; max-height: 42vh; overflow: auto; }
-.device { display: flex; align-items: center; gap: 11px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+/* ---------- 选择摄像头 ----------
+   整行可点，勾选框自绘（22 的方块，够 44 的触控面积靠整行 padding），
+   右侧只保留「已添加」一个状态位；型号原本挤在右边把名字压没了，收到副标题里。 */
+.pick-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 15px 0 10px; }
+.pick-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pick-actions { display: flex; gap: 6px; }
+.pick-actions .btn { min-height: 30px; padding: 0 11px; font-size: 12px; }
+.pick-search { display: flex; align-items: center; gap: 8px; height: 40px; margin-bottom: 10px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.pick-search .ic { width: 16px; height: 16px; color: var(--dim); }
+.pick-search input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--text); font-size: 13px; }
+.pick-search input:focus { outline: none; }
+.pick-search input::-webkit-search-cancel-button { display: none; }
+.pick-empty { padding: 22px 12px; color: var(--dim); font-size: 12.5px; text-align: center; }
+.pick-footer { display: flex; }
+
+.device-list { margin: 0 0 12px; display: grid; gap: 8px; max-height: 42vh; overflow: auto; overscroll-behavior: contain; }
+.device-list::-webkit-scrollbar { width: 5px; }
+.device-list::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--line-2); }
+.device-list::-webkit-scrollbar-track { background: transparent; }
+.device { position: relative; display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
 .device:hover { border-color: var(--line-2); }
-.device input { width: 15px; height: 15px; accent-color: var(--blue); }
+.device.on { border-color: color-mix(in srgb, var(--blue) 46%, var(--line)); background: color-mix(in srgb, var(--blue) 8%, var(--panel)); }
+.device.pick-hide { display: none; }
+/* 原生复选框只留可访问性（键盘 / 读屏），视觉由下面这颗方块承担 */
+.device-box { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.device-tick { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border: 1.5px solid var(--line-2); border-radius: 7px; background: transparent; color: transparent; transition: background 0.15s, border-color 0.15s, color 0.15s; }
+.device:hover .device-tick { border-color: var(--muted); }
+.device-tick .ic { width: 13px; height: 13px; }
+.device.on .device-tick { border-color: var(--blue); background: var(--blue); color: var(--on-blue); }
+.device-box:focus-visible ~ .device-tick { outline: 2px solid var(--blue-2); outline-offset: 2px; }
 .device-text { flex: 1; min-width: 0; }
-.device-text b { display: block; font-size: 12.5px; }
-.device-text span { display: block; margin-top: 3px; color: var(--dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tag { flex: none; font-size: 9px; color: var(--dim); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; }
-.tag.added { color: var(--live); border-color: color-mix(in srgb, var(--live) 35%, transparent); }
+.device-text b { display: block; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-sub { display: block; margin-top: 3px; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-badge { flex: none; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--live) 34%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--live) 10%, transparent); color: var(--live); font-size: 10px; }
 
 /* ---------- settings drawer ---------- */
 
@@ -904,6 +937,12 @@ body.wall .grid { grid-template-rows: none !important; }
 .drawer-head h2 { margin: 0; font-size: 18px; font-weight: 650; }
 .drawer-head p { margin: 4px 0 0; color: var(--dim); font-size: 10.5px; }
 .drawer-body { margin-top: 20px; }
+/* 设置分类页签：三段等宽，跟下面的 .seg 同一种圆角语言，但底宽铺满 */
+.drawer-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.drawer-tabs button { flex: 1; height: 34px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; }
+.drawer-tabs button:hover { color: var(--text); }
+.drawer-tabs button.on { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.set-pane { padding-top: 4px; }
 .set-sec { padding: 14px 0 16px; border-bottom: 1px solid var(--line); }
 .set-label { display: block; margin-bottom: 9px; color: var(--dim); font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase; }
 
@@ -918,15 +957,36 @@ body.wall .grid { grid-template-rows: none !important; }
 .layout-tiles button.on { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 34%, transparent); background: color-mix(in srgb, var(--blue) 8%, transparent); }
 .layout-tiles .ic { width: 18px; height: 18px; }
 
-.settings-list { margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; background: var(--panel); font-size: 11.5px; border-bottom: 1px solid var(--line); }
+.settings-list { margin: 16px 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--panel); font-size: 12px; border-bottom: 1px solid var(--line); }
 .settings-row:last-child { border-bottom: 0; }
-.settings-row span { color: var(--muted); }
-.settings-row b { font-weight: 500; color: var(--text); }
-.switch { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
-.switch input { width: 14px; height: 14px; accent-color: var(--blue); }
-.settings-actions { display: flex; gap: 7px; flex-wrap: wrap; margin: 14px 0; }
-.drawer-body > .muted { margin: 0; }
+/* 标题不参与压缩：版本号、仓库链接再长也只能自己换行，
+   否则「后台 2 分钟后休眠」这种长标题会被挤成两行 */
+.settings-row > span:first-child { flex: none; color: var(--muted); }
+.settings-row b { min-width: 0; font-weight: 500; color: var(--text); text-align: right; overflow-wrap: anywhere; }
+.settings-row > a { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+/* 开关：原生 checkbox 的蓝色小方块跟整页的分段控件不是一套语言。
+   input 仍是 checkbox，只是把外观接管过来，JS 与 a11y 名都不用动。 */
+.switch { position: relative; display: inline-flex; flex: none; align-items: center; }
+.switch input { -webkit-appearance: none; appearance: none; width: 46px; height: 28px; margin: 0; border-radius: 999px; background: var(--line-2); cursor: pointer; transition: background-color 0.18s ease; }
+.switch input:checked { background: var(--blue); }
+.switch i { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(9, 18, 28, 0.35); pointer-events: none; transition: transform 0.18s ease; }
+.switch input:checked + i { transform: translateX(18px); }
+/* 两个按钮按文字宽度排，右边会空出一大截，看着像没排完。等分。 */
+.settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+.settings-actions .btn { padding: 8px 10px; }
+.drawer-body > .muted,
+.set-pane > .muted { margin: 8px 0 0; }
+/* 抽屉整体会滚（不只是 body）：内容一超屏就冒出 15px 宽的系统滚动条，
+   行被挤窄、左右白边不再对称。用 5px 细条。
+   注意别再写 scrollbar-width —— Chromium 里标准属性优先于 ::-webkit-scrollbar，
+   写成 thin 反而是 10px。 */
+.drawer-panel::-webkit-scrollbar,
+.drawer-body::-webkit-scrollbar { width: 5px; }
+.drawer-panel::-webkit-scrollbar-thumb,
+.drawer-body::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--line-2); }
+.drawer-panel::-webkit-scrollbar-track,
+.drawer-body::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- toast / wall ---------- */
 
@@ -949,6 +1009,9 @@ body.wall .grid { grid-template-rows: none !important; }
   pointer-events: none;
   transition: 0.18s ease;
 }
+/* 单画面开方向盘时，提示条会压在方向键上：「松手停」这类提示本来就在
+   最容易误触的那几秒出现。抬到方向盘上方。 */
+body.ptz-on .toast { bottom: 224px; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 .toast.err { color: #ffb0b8; border-color: rgba(255, 99, 115, 0.4); }
 
@@ -1039,11 +1102,603 @@ body.wall .wall-exit { display: grid; }
   .login-tab { padding: 11px 12px; }
   .seg button { height: 34px; }
   .viewer-actions .icon-btn { width: 40px; height: 40px; }
-  .quality-btn { height: 36px; padding: 0 10px; }
+  .quality-btn { height: 40px; padding: 0 11px; }
   .viewer-chips button { height: 30px; padding: 0 11px; }
   .foot-tools button { width: 32px; height: 32px; }
-  .device { padding: 12px; }
-  .device input, .switch input { width: 18px; height: 18px; }
+  .device { padding: 13px 13px; border-radius: 14px; }
+  .device-tick { width: 24px; height: 24px; border-radius: 8px; }
+  .switch input { width: 48px; height: 30px; }
+  .switch i { width: 24px; height: 24px; }
+  /* 选择摄像头：抽屉撑成整块，列表自己滚，底部按钮一直留在拇指区。
+     不能给 step 写死 max-height——算不准就会把按钮压到卡片的 padding 上，
+     交给 flex 链路（卡片 → steps → step → 列表）自己分高度。 */
+  .modal-card.login-card { display: flex; flex-direction: column; overflow: hidden; }
+  .modal-card.login-card .steps { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .modal-card.login-card .step.on { flex: 1 1 auto; min-height: 0; }
+  .step[data-step="devices"].on { display: flex; flex-direction: column; }
+  .step[data-step="devices"] .device-list { flex: 1 1 auto; min-height: 90px; max-height: none; margin: 0; }
+  .step[data-step="devices"] .pick-toolbar,
+  .step[data-step="devices"] .pick-search,
+  .step[data-step="devices"] .form-status,
+  .step[data-step="devices"] .pick-footer { flex: none; }
+  .step[data-step="devices"] .pick-footer { margin-top: 10px; }
+  /* 登录 / 验证码步骤内容若不巧超高，整块自己滚，别顶出抽屉 */
+  .modal-card.login-card .step.on:not([data-step="devices"]) { overflow: auto; }
   .settings-row { padding: 13px 12px; }
   .layout-tiles button { height: 66px; }
 }
+
+
+/* ============================================================
+   手机端界面层
+   ------------------------------------------------------------
+   设计依据：Apple Human Interface Guidelines + HarmonyOS Design
+   · 8pt / 8vp 栅格；页面左右留白 12，卡片间距 8，卡片圆角 16
+   · 顶部导航栏 48（HIG 导航栏 44pt + 视觉呼吸），叠加状态栏安全区
+   · 摄像机切换条放到底部拇指可达区（华为智慧生活 / Apple 家庭同思路）
+   · 触控目标不小于 44×44（HIG 44pt 与鸿蒙 48vp 的公约数）
+   · 弹窗改底部抽屉（sheet）：20 顶角 + 抓手 + 安全区内边距
+   · 层级靠留白与明度，不靠描边堆叠；文字按 11/13/20 三档收敛
+
+   同时修掉三个真机问题：
+   1) 底栏 9 项信息是 nowrap 单行，实测内容宽 411，把文档撑到 519，
+      于是整个页面能被左右拖动、右侧内容被裁 —— 手机上不显示该栏。
+   2) 单画面下 .card-tools 只靠 :hover 显现，触屏永远点不到静音/截图/
+      画质/缩放；改为常驻「更多」按钮点开。
+   3) 全屏查看 7 个按钮挤成一行，右侧被切出屏幕；改两行排布。
+   ============================================================ */
+
+@media (max-width: 600px) {
+  :root {
+    --m-gap: 8px;
+    --m-pad: 12px;
+    --m-radius: 16px;
+    --m-touch: 44px;
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* ---------- 排版：iOS / 鸿蒙 字体栈 ---------- */
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+                 "HarmonyOS Sans SC", "HarmonyOS Sans", "Noto Sans SC",
+                 "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+  }
+  /* 移动端 WebView 可视高度随工具栏变化，dvh 更贴近真实可视区 */
+  .shell { height: 100vh; height: 100dvh; }
+
+  /* ---------- 顶部导航栏 ---------- */
+  .appbar {
+    height: calc(48px + var(--safe-t));
+    padding: var(--safe-t) var(--m-pad) 0;
+    gap: var(--m-gap);
+  }
+  .brand-mark { width: 28px; height: 28px; border-radius: 8px; }
+  .brand-mark .ic { width: 18px; height: 18px; }
+  .brand-text b { font-size: 13px; letter-spacing: 0.1px; }
+  .brand-text em { display: none; }
+  /* 手机上只留「状态 + 必要操作」，其余收进设置抽屉 */
+  .engine, #btnTheme, .online-badge, .account { display: none; }
+
+  .layout-btn { height: 34px; padding: 0 8px; gap: 4px; border-radius: 10px; }
+  .layout-btn .chev { display: block; }      /* 只留图标会看不出这是下拉 */
+  .add-btn {
+    width: 36px; height: 34px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 10px;
+  }
+  .add-btn span { display: none; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 10px; }
+  .icon-btn .ic { width: 19px; height: 19px; }
+  /* 画质按钮要跟着一起缩，否则和两侧图标高矮不齐 */
+  .quality-btn { height: 36px; padding: 0 10px; }
+
+  /* ---------- 主体：画面在上，摄像机条在下 ---------- */
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  /* 全屏拼接只剩 stage 一个子项，行定义不还原会塌成 0 高 */
+  body.wall .app { grid-template-rows: minmax(0, 1fr); }
+
+  /* ---------- 底部摄像机条 ---------- */
+  .side {
+    order: 2;
+    position: relative;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    padding-bottom: var(--safe-b);
+    background: var(--side);
+  }
+  .room-list {
+    flex: none;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px var(--m-pad);
+    gap: var(--m-gap);
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  .room-list::-webkit-scrollbar { display: none; }
+
+  .room {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 0;
+    min-height: var(--m-touch);
+    flex-direction: row;
+    gap: 7px;
+    padding: 0 13px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    scroll-snap-align: center;
+    transition: background 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+  }
+  .room:hover { background: transparent; }          /* 触屏的 hover 会粘住，去掉 */
+  .room:active { transform: scale(0.97); }
+  .room.on {
+    background: color-mix(in srgb, var(--blue) 16%, transparent);
+    border-color: color-mix(in srgb, var(--blue) 44%, transparent);
+  }
+  .room.on::before { display: none; }               /* 桌面版左侧竖条在横排里没意义 */
+  .room-ico { width: 20px; height: 20px; }
+  .room-ico .ic { width: 19px; height: 19px; }
+  /* 一条里露出 2.5 个 chip：既容得下长名字，也暗示还能往左滑 */
+  .room b { max-width: 26vw; font-size: 13px; font-weight: 500; }
+  .room em { display: none; }
+  .room-dot { top: 0; right: 0; }
+  .room-empty { padding: 12px 8px; white-space: nowrap; }
+
+  /* ---------- 画面区：全宽 + 大圆角 + 纯黑承托 ---------- */
+  .stage-body { padding: var(--m-gap); }
+  .grid { gap: var(--m-gap); }
+  .card { border-radius: var(--m-radius); }
+  /* 竖屏下 16:9 源的上下黑边与卡片融为一体，看起来像播放器而不是「留白」 */
+  .grid.single .card {
+    background: #000;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  .grid.single .card-hero-info { left: 14px; right: 52px; bottom: 14px; font-size: 11px; }
+  .grid.single .card-hero-info b { font-size: 13px; }
+  .card-hero-info .signal,
+  .card-hero-info .ip { display: none; }            /* 手机不需要看码率与 IP */
+
+  /* ---------- 底栏信息条：状态栏已有时间，这一行让位给画面 ---------- */
+  .stage-foot { display: none; }
+
+  /* ---------- 空状态 ---------- */
+  .empty { padding: 24px 18px; }
+  .empty h2 { font-size: 18px; }
+  .empty p { font-size: 13px; line-height: 1.75; }
+
+  /* ---------- 弹窗改底部抽屉 ---------- */
+  /* .modal.drawer 原本是「右侧抽屉 + align-items: stretch」，必须一起改 */
+  .modal,
+  .modal.drawer {
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 0;
+  }
+  .modal-card,
+  .drawer-panel {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    max-height: 88dvh;
+    border: 0;
+    border-radius: 20px 20px 0 0;
+    padding: 26px 18px calc(28px + var(--safe-b));
+    box-shadow: 0 -20px 60px rgba(0, 0, 0, 0.45);
+    animation: sheetUp 0.24s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  /* 抓手：鸿蒙 / iOS 底部抽屉的统一暗示 */
+  .modal-card::before,
+  .drawer-panel::before {
+    content: "";
+    position: absolute;
+    top: 8px; left: 50%;
+    width: 36px; height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--line-2);
+  }
+  .modal-close { top: 16px; right: 14px; width: 34px; height: 34px; border-radius: 10px; }
+  .drawer-head { padding-right: 42px; }
+  .drawer-head h2 { font-size: 20px; }
+  .drawer-body { margin-top: 16px; }
+  /* 抽屉内部自己滚，别把滚动传给背后的页面；底部多留一截，最后一行不会卡在屏幕边缘 */
+  .drawer-panel { overscroll-behavior: contain; scroll-padding-bottom: 24px; }
+  .drawer-body { padding-bottom: 8px; }
+  .drawer-tabs { margin-top: 2px; }
+  .drawer-tabs button { height: 40px; font-size: 13px; }
+  .set-sec { padding: 16px 0; }
+  /* 分段控件按文字宽度排：四档「方向反转」只占左半，三档「轻点步长」更短，
+     右边一片空白，看着像没排完。撑满并等分，与上面的页签同一套栅格。 */
+  .seg { display: flex; width: 100%; }
+  .seg button { flex: 1 1 0; min-width: 0; padding: 0 6px; }
+  .btn { min-height: var(--m-touch); }
+  /* 原来写的是 padding: 14px 0 —— 左右内边距清零后，文字和开关直接贴在
+     卡片边框上（真机截图里「引擎版本」顶上边框就是这个）。行高也统一给死：
+     带开关的行比纯文字行矮 4px，六行叠起来是锯齿。 */
+  /* 53 而不是 52：带开关的行内容 28 + 上下 padding 24 + 1px 分隔线正好 53，
+     写 52 时它会溢出 1px，六行叠起来分隔线是锯齿 */
+  .settings-list .settings-row { padding: 12px 14px; min-height: 53px; font-size: 13px; }
+  .settings-list { border-radius: 12px; }
+  /* 说明文字原来是 11px，手机上低于可读下限 */
+  .set-pane > .muted { margin: 12px 0 2px; font-size: 12px; line-height: 1.7; }
+
+  /* ---------- 全屏单看：操作栏换行，避免右侧被切 ---------- */
+  .viewer-top {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: calc(12px + var(--safe-t)) calc(12px + env(safe-area-inset-right, 0px)) 18px
+             calc(12px + env(safe-area-inset-left, 0px));
+  }
+  .viewer-actions {
+    margin-left: 0;                 /* 基础样式有 margin-left:auto，纵向排列时会右移 */
+    width: 100%;
+    justify-content: space-between;
+    gap: 0;
+    padding: 4px;
+    border-radius: 14px;
+  }
+  .viewer-bottom {
+    padding: 22px calc(12px + env(safe-area-inset-right, 0px))
+             calc(12px + var(--safe-b)) calc(12px + env(safe-area-inset-left, 0px));
+    gap: 8px;
+  }
+  .viewer-hint { display: none; }                   /* 「方向键 / Esc」对手机没意义 */
+  .viewer-chips { justify-content: flex-start; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  .viewer-chips::-webkit-scrollbar { display: none; }
+  .viewer-chips button { height: 34px; padding: 0 12px; border-radius: 999px; flex: none; }
+  .viewer-clock { flex: none; font-size: 11px; }
+}
+
+@keyframes sheetUp {
+  from { transform: translateY(18px); opacity: 0.6; }
+  to { transform: none; opacity: 1; }
+}
+
+/* ---------- 横屏手机：高度紧张，纵向留给画面，侧栏继续竖排 ---------- */
+@media (pointer: coarse) and (max-height: 500px) and (orientation: landscape) {
+  .appbar {
+    height: calc(38px + var(--safe-t));
+    padding: var(--safe-t) 10px 0;
+  }
+  .brand-text, .engine, #btnTheme, .account { display: none; }
+  .app { grid-template-columns: 122px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .side {
+    order: 0;
+    border-top: 0;
+    border-right: 1px solid var(--line);
+    padding-bottom: 0;
+  }
+  .room-list {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 6px;
+    gap: 4px;
+    scroll-snap-type: none;
+  }
+  .room {
+    flex-direction: row;
+    justify-content: flex-start;
+    width: 100%;
+    min-width: 0;
+    min-height: var(--m-touch);
+    gap: 8px;
+    padding: 0 9px;
+    border-color: transparent;
+    border-radius: 10px;
+  }
+  .room b { max-width: none; font-size: 12px; }
+  .room em { display: none; }
+  .room-ico { width: 18px; height: 18px; }
+  .room-ico .ic { width: 17px; height: 17px; }
+  .stage-body { padding: 8px 8px 0; }
+  .stage-foot { display: flex; height: 24px; font-size: 9px; }
+  .stage-foot .privacy,
+  .stage-foot .sep,
+  .stage-foot .foot-tools,
+  .stage-foot .foot-engine { display: none; }
+  .viewer-top { flex-direction: row; align-items: center; }
+  .viewer-actions { margin-left: auto; width: auto; justify-content: flex-end; gap: 2px; }
+  .viewer-hint { display: none; }
+}
+
+/* ============================================================
+   触屏设备：把只能 hover 才出现的东西改成常驻可点
+   ============================================================ */
+
+@media (pointer: coarse) {
+  /* 单画面原来只靠 .card:hover 显现工具条，触屏永远点不到；
+     改成常驻「更多」按钮，点一下展开（.menu-open 逻辑已存在）。
+     网格卡片只有 180 多宽，塞不下 4 个工具，改为「点一下直接进单画面」。 */
+  .grid:not(.single) .card-menu-btn { display: none; }
+  .grid.single .card-menu-btn { display: grid; }
+  .grid.single .hero-expand { display: none; }
+  .grid.single .card-tools { right: 56px; }        /* 让开「更多」按钮，不再叠在一起 */
+  .card.menu-open .card-tools { opacity: 1; transform: none; pointer-events: auto; }
+
+  /* backdrop-filter 叠在解码中的视频上要逐帧高成本合成；
+     手机上改用半透明纯色，观感几乎无差别 */
+  .hero-expand,
+  .card-menu-btn,
+  .card-tools,
+  .zoom-hud,
+  .viewer-actions,
+  .toast,
+  .wall-exit { backdrop-filter: none; }
+  .card-tools,
+  .card-menu-btn,
+  .zoom-hud { background-color: rgba(7, 12, 19, 0.82); }
+  .viewer-actions { background-color: rgba(7, 12, 19, 0.86); }
+
+  /* 按下态：iOS 与鸿蒙都要求即时视觉反馈 */
+  .room:active,
+  .icon-btn:active,
+  .tool:active,
+  .btn:active { opacity: 0.72; }
+}
+
+/* 兜底：任何情况下都不允许整页横向溢出（溢出即变成整屏拖动） */
+.shell { overflow: hidden; }
+.stage, .stage-body { min-width: 0; }
+
+/* ---------- 首帧前的上一帧占位 ---------- */
+/* 卡片：铺在视频之上、遮罩之下。模糊 + 压暗，明确是「旧画面」而不是实时 */
+.card-still {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background-size: cover;
+  background-position: center;
+  filter: blur(14px) saturate(1.05) brightness(0.66);
+  transform: scale(1.08);      /* 模糊后边缘会透出底色，放大一点盖住 */
+  opacity: 0;
+  transition: opacity 0.26s ease;
+  pointer-events: none;
+}
+.card-still.on { opacity: 1; }
+
+/* 单画面：盖在 video 上（video 自带不透明底色），出画后淡出 */
+.viewer-still {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background-size: cover;
+  background-position: center;
+  filter: blur(18px) brightness(0.55);
+  transform: scale(1.08);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.viewer-still.on { opacity: 1; }
+
+/* ---------- 首帧超时提示 ---------- */
+.viewer-slow {
+  position: absolute;
+  /* 顶栏以下才开始，否则会盖住关闭按钮，用户想退都退不出去 */
+  inset: calc(58px + env(safe-area-inset-top, 0px)) 0 0 0;
+  z-index: 9;
+  pointer-events: none;      /* 只让卡片本身可点，别吃掉顶栏和底栏的手势 */
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 7, 12, 0.55);
+}
+.viewer-slow[hidden] { display: none; }
+.viewer-slow-card {
+  width: min(340px, 100%);
+  pointer-events: auto;
+  padding: 18px 18px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(10, 16, 24, 0.92);
+  color: #e8eef7;
+  text-align: center;
+}
+.viewer-slow-card b { display: block; font-size: 14px; font-weight: 600; }
+.viewer-slow-card p {
+  margin: 8px 0 14px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+.viewer-slow-actions { display: flex; gap: 8px; }
+.viewer-slow-actions button {
+  flex: 1;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eef7;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.viewer-slow-actions button:first-child {
+  border-color: color-mix(in srgb, var(--blue) 55%, transparent);
+  background: color-mix(in srgb, var(--blue) 28%, transparent);
+}
+.viewer-slow-actions button:active { opacity: 0.75; }
+.viewer-slow-actions button[hidden] { display: none; }
+
+/* ---------- 云台方向盘 ---------- */
+.ptz-pad {
+  position: absolute;
+  left: 18px;
+  bottom: 74px;
+  z-index: 4;
+  width: 138px;
+  height: 138px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 2px;
+  padding: 6px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  /* 方向盘永远叠在视频上，用固定的深色玻璃 + 浅色图标；
+     跟着主题变会变成“浅色主题下深底深字”，两边都看不清 */
+  background: rgba(7, 12, 19, 0.72);
+  color: #eef4fb;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  opacity: 0.94;
+  transition: opacity 0.18s ease;
+}
+.ptz-pad[hidden] { display: none; }
+.ptz-pad:active { opacity: 1; }
+.ptz-btn {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  /* 继承方向盘固定的浅色，别用 --text：浅色主题下会变成深色箭头贴在深底上 */
+  color: inherit;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.ptz-btn .ic { width: 15px; height: 15px; opacity: 0.95; }
+.ptz-btn:active,
+.ptz-btn.on { background: color-mix(in srgb, var(--blue) 26%, transparent); }
+.ptz-btn.on .ic,
+.ptz-btn:active .ic { opacity: 1; }
+/* 默认朝上，按方向旋转；斜向按钮在型号不支持时由 JS 直接隐藏 */
+/* 每个方向显式占格：斜向按钮被 hidden 后若靠自动排布，剩下的键会挤到
+   前两格（上键跑到左上、收起键跑到右上），方向盘就不是十字了。
+   grid 自动流对 display:none 的项不留坑，所以位置必须写死。 */
+.ptz-btn[data-move="left_up"] { grid-area: 1 / 1; }
+.ptz-btn[data-move="up"] { grid-area: 1 / 2; }
+.ptz-btn[data-move="right_up"] { grid-area: 1 / 3; }
+.ptz-btn[data-move="left"] { grid-area: 2 / 1; }
+.ptz-hub { grid-area: 2 / 2; }
+.ptz-btn[data-move="right"] { grid-area: 2 / 3; }
+.ptz-btn[data-move="left_down"] { grid-area: 3 / 1; }
+.ptz-btn[data-move="down"] { grid-area: 3 / 2; }
+.ptz-btn[data-move="right_down"] { grid-area: 3 / 3; }
+
+.ptz-btn[data-move="up"] .ic { transform: rotate(0deg); }
+.ptz-btn[data-move="right_up"] .ic { transform: rotate(45deg); }
+.ptz-btn[data-move="right"] .ic { transform: rotate(90deg); }
+.ptz-btn[data-move="right_down"] .ic { transform: rotate(135deg); }
+.ptz-btn[data-move="down"] .ic { transform: rotate(180deg); }
+.ptz-btn[data-move="left_down"] .ic { transform: rotate(225deg); }
+.ptz-btn[data-move="left"] .ic { transform: rotate(270deg); }
+.ptz-btn[data-move="left_up"] .ic { transform: rotate(315deg); }
+.ptz-hub {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  -webkit-tap-highlight-color: transparent;
+}
+.ptz-hub i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.34);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.ptz-pad.busy .ptz-hub i {
+  background: var(--blue-2);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 30%, transparent);
+}
+.ptz-toggle {
+  position: absolute;
+  left: 18px;
+  bottom: 74px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 17px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(7, 12, 19, 0.72);
+  color: #eef4fb;
+  font-size: 11px;
+  backdrop-filter: blur(14px);
+}
+.ptz-toggle[hidden] { display: none; }
+.ptz-toggle .ic { width: 13px; height: 13px; opacity: 0.8; }
+
+@media (max-width: 600px) {
+  .ptz-pad {
+    left: calc(var(--m-pad) + 2px);
+    bottom: calc(64px + var(--safe-b));
+    width: 152px;
+    height: 152px;
+    border-radius: 22px;
+    /* 手机上叠在解码中的视频上，去掉实时模糊，省掉逐帧合成 */
+    backdrop-filter: none;
+    background-color: rgba(7, 12, 19, 0.78);
+  }
+  .ptz-btn { border-radius: 12px; }
+  body.ptz-on .toast { bottom: calc(64px + var(--safe-b) + 162px); }
+  .viewer-slow-card { padding: 20px 16px 16px; }
+  .viewer-slow-actions button { height: var(--m-touch); }
+  .ptz-btn .ic { width: 17px; height: 17px; }
+  .ptz-toggle {
+    left: calc(var(--m-pad) + 2px);
+    bottom: calc(64px + var(--safe-b));
+    height: var(--m-touch);
+    padding: 0 14px;
+    border-radius: 22px;
+    font-size: 12px;
+    backdrop-filter: none;
+    background-color: rgba(7, 12, 19, 0.78);
+  }
+}
+
+/* ---------- 设置项说明文字 ---------- */
+.set-hint { margin: 9px 0 0; color: var(--dim); font-size: 10.5px; line-height: 1.55; }
+/* 两行以上的说明（填充方式、窗口比例）挤成一团不好读：
+   左侧一条竖线把它和上面的控件分开，行距也放松一点 */
+.set-hint.hint-block {
+  /* 不要底色：加了底色就长得像能点的按钮，跟上面的分段控件抢注意力。
+     只留左侧竖线，一眼看出是「对上面这组控件的解释」。 */
+  margin-top: 10px;
+  padding: 1px 0 1px 11px;
+  border-left: 2px solid var(--line-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.62;
+}
+
+/* ---------- 设置项：可复制值与外部链接 ---------- */
+/* 版本号/账号这类值需要能被用户取走反馈问题：可选中，点一下复制 */
+.settings-row b.copyable {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: pointer;
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: 1px;
+}
+.settings-row b.copyable:active { color: var(--blue); border-bottom-color: var(--blue); }
+/* 版本号是被人逐字读/贴进 issue 的内容：等宽字体 + 等宽数字，比比例字体好认 */
+.settings-row b.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+.settings-row a { color: var(--blue); font-weight: 500; text-decoration: none; }
+.settings-row a:active { opacity: 0.65; }
