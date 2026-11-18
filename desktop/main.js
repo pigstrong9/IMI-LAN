@@ -343,6 +343,26 @@ function onScreen(b) {
   });
 }
 
+// 主窗口永远留在 LAN 页面：外链交给系统浏览器。同一 URL 1 秒内只开一次 ——
+// window.open 被 setWindowOpenHandler 拒绝后，网页会退回 location.href，
+// 两次都会经过这里，不去重会连开两个浏览器标签。
+let lastExternal = { url: '', at: 0 };
+function openExternal(url) {
+  if (!/^https?:/i.test(url)) return;
+  const now = Date.now();
+  if (lastExternal.url === url && now - lastExternal.at < 1000) return;
+  lastExternal = { url, at: now };
+  shell.openExternal(url);
+}
+
+function sameAppOrigin(url) {
+  try {
+    return new URL(url).origin === new URL(API_URL).origin;
+  } catch {
+    return false;
+  }
+}
+
 function createWindow() {
   const saved = loadWindowState();
   const opts = {
@@ -369,7 +389,21 @@ function createWindow() {
   if (saved.maximized) win.maximize();
   if (saved.fullscreen) win.setFullScreen(true);
   win.once('ready-to-show', () => win.show());
-  win.loadURL(`${API_URL}/?app=1&t=${Date.now()}`);
+  // 注入应用版本（package.json 的 version），网页据此静默检查 GitHub 新版本。
+  // URL 编码防 version 里出现特殊字符；app=1 保留给原有提示语判断。
+  win.loadURL(`${API_URL}/?app=1&appVer=${encodeURIComponent(app.getVersion())}&t=${Date.now()}`);
+  // 网页里的外链（检查更新 / 关于页）只交给系统浏览器，主窗口不能被导航走。
+  // window.open 被拒后网页会退回 location.href，will-navigate 再接一层。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (sameAppOrigin(url)) return { action: 'allow' };
+    openExternal(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (ev, url) => {
+    if (sameAppOrigin(url)) return;
+    ev.preventDefault();
+    openExternal(url);
+  });
   win.on('close', ev => {
     saveWindowState();
     if (quitting) return;

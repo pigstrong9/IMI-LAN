@@ -1690,3 +1690,19 @@ body.wall .wall-exit { display: grid; }
 }
 .settings-row a { color: var(--blue); font-weight: 500; text-decoration: none; }
 .settings-row a:active { opacity: 0.65; }
+
+/* ---------- 检查更新 ---------- */
+/* 设置按钮右上角红点：发现新版时提示，点击设置即可查看 */
+#btnSettings { position: relative; }
+.update-dot {
+  position: absolute;
+  top: 3px; right: 3px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--side);
+  pointer-events: none;
+}
+.update-dot[hidden] { display: none; }
+/* 更新行：有新版/可点时由 JS 加 .copyable（蓝色虚线，沿用设置值的可点样式） */
+#updateRow { cursor: pointer; }
