@@ -41,18 +41,21 @@ index 984c73e..3aa6ff2 100644
  	for _, prod := range s.producers {
 diff --git a/internal/xiaomi/ptz_test.go b/internal/xiaomi/ptz_test.go
 new file mode 100644
-index 0000000..400530e
+index 0000000..3fa2c7e
 --- /dev/null
 +++ b/internal/xiaomi/ptz_test.go
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,54 @@
 +package xiaomi
 +
 +import "testing"
 +
-+// 桌面版没有网关按型号查 miot-spec 的能力，只能按白名单 fail-closed：
-+// 云台机显示方向盘，固定机 / 门铃 / 未知型号一律不显示。
++// 桌面版没有网关按型号查 miot-spec 的能力。策略是 fail-open：
++// 只把已知的固定机 / 门铃藏起来，其余型号（包括未收录的新型号和没写
++// model= 的流）默认显示方向盘 —— 新设备不用改代码，按了没反应也只是
++// 提示一次。已知固定机 / 门铃仍然不显示。
 +func TestBuildPTZSpec(t *testing.T) {
 +	for _, model := range []string{
++		"", // 流地址里没有 model=，也按云台机处理
 +		"chuangmi.camera.029a02",
 +		"chuangmi.camera.039c01",
 +		"chuangmi.camera.061a01",
@@ -60,21 +63,25 @@ index 0000000..400530e
 +		"chuangmi.camera.12ab1",
 +		"xiaovv.camera.q8",
 +		"xiaovv.camera.fjcam3",
++		"chuangmi.camera.999",  // 未收录的新型号
++		"new.brand.camera.xyz", // 完全未知的品牌
 +	} {
 +		spec := buildPTZSpec(model)
 +		if !spec.Supported || spec.Channel != "miss" {
-+			t.Errorf("%s: want supported miss channel, got %+v", model, spec)
++			t.Errorf("%q: want supported miss channel, got %+v", model, spec)
 +		}
 +		if len(spec.Dirs) != 4 {
-+			t.Errorf("%s: want 4 dirs, got %v", model, spec.Dirs)
++			t.Errorf("%q: want 4 dirs, got %v", model, spec.Dirs)
++		}
++		if spec.Note == "" {
++			t.Errorf("%q: want a note explaining the pad may do nothing", model)
 +		}
 +	}
 +
 +	for _, model := range []string{
-+		"",
-+		"madv.cateye.mi3iot",  // 门铃
-+		"mijia.camera.v3",     // 固定机
-+		"chuangmi.camera.999", // 未收录型号
++		"madv.cateye.mi3iot", // 门铃
++		"madv.cateye.mi2iot", // 门铃（同系列）
++		"mijia.camera.v3",    // 固定机
 +	} {
 +		spec := buildPTZSpec(model)
 +		if spec.Supported || len(spec.Dirs) != 0 {
@@ -85,12 +92,15 @@ index 0000000..400530e
 +		}
 +	}
 +
-+	if !ptzKnown("CHUANGMI.CAMERA.81AC1") {
-+		t.Error("model lookup should be case-insensitive")
++	if !ptzFixed("MADV.CATEYE.MI3IOT") {
++		t.Error("fixed model lookup should be case-insensitive")
++	}
++	if ptzFixed("chuangmi.camera.061a01") {
++		t.Error("a PTZ model must not be treated as fixed")
 +	}
 +}
 diff --git a/internal/xiaomi/xiaomi.go b/internal/xiaomi/xiaomi.go
-index 957c9d7..0cd9813 100644
+index 957c9d7..29a599f 100644
 --- a/internal/xiaomi/xiaomi.go
 +++ b/internal/xiaomi/xiaomi.go
 @@ -8,6 +8,7 @@ import (
@@ -101,7 +111,7 @@ index 957c9d7..0cd9813 100644
  	"strings"
  	"sync"
  
-@@ -51,6 +52,255 @@ func Init() {
+@@ -51,6 +52,256 @@ func Init() {
  	})
  
  	api.HandleFunc("api/xiaomi", apiXiaomi)
@@ -190,16 +200,12 @@ index 957c9d7..0cd9813 100644
 +// 桌面版（Electron）不启动 imi-gateway，UI 由 go2rtc 的 static_dir 直接提供，
 +// 所以这里补一份响应结构与网关 /ptz、/ptz/spec 相同的实现。
 +//
-+// 能力判定 fail-closed：只认流地址里 model= 命中的云台白名单。固定摄像机、
-+// 门铃和未知型号一律不显示方向盘，避免「按了没反应」。
-+var ptzModels = map[string]bool{
-+	"chuangmi.camera.029a02": true, // 米家 360° 2K 云台版
-+	"chuangmi.camera.039c01": true, // 小米智能摄像机 2 云台版
-+	"chuangmi.camera.061a01": true, // 小米智能摄像机 3 Pro 云台版
-+	"chuangmi.camera.81ac1":  true, // 小米智能摄像机 C700
-+	"chuangmi.camera.12ab1":  true, // 创米云台机型
-+	"xiaovv.camera.q8":       true, // xiaovv 2K 云台
-+	"xiaovv.camera.fjcam3":   true, // xiaovv 母婴看护云台
++// 能力判定 fail-open：只有已知的固定机 / 门铃（madv.cateye.* 门铃、
++// mijia.camera.v3 固定机）不显示方向盘；其余型号——包括未收录的新型号和
++// 没写 model= 的流——默认按云台机处理。这样新设备不用改代码，代价是
++// 固定机上按了可能没反应（界面会提示一次，不会一直刷）。
++var ptzFixedModels = map[string]bool{
++	"mijia.camera.v3": true, // 米家智能摄像机 1080P（固定机）
 +}
 +
 +var (
@@ -246,28 +252,32 @@ index 957c9d7..0cd9813 100644
 +	return ""
 +}
 +
-+func ptzKnown(model string) bool {
-+	return model != "" && ptzModels[strings.ToLower(model)]
++// ptzFixed 判断已知没有云台的型号。门铃统一是 madv.cateye.*；
++// 其余只在明确知道是固定机时才列进来，避免把新型号误判成固定机。
++func ptzFixed(model string) bool {
++	m := strings.ToLower(strings.TrimSpace(model))
++	if m == "" {
++		return false
++	}
++	return ptzFixedModels[m] || strings.HasPrefix(m, "madv.cateye.")
 +}
 +
 +func buildPTZSpec(model string) *ptzSpec {
 +	spec := &ptzSpec{Model: model}
-+	if ptzKnown(model) {
-+		spec.Supported = true
-+		spec.PTZCapable = true
-+		spec.Channel = "miss"
-+		spec.Source = "miss"
-+		spec.Action = "MISS 0x112 motor"
-+		spec.Dirs = ptzDirs
-+		spec.Note = "转动命令走视频连接里的命令通道；画面不动说明这台不是云台机或已到角度极限"
++	if ptzFixed(model) {
++		spec.Note = "该型号是固定机/门铃，没有云台，不显示方向盘"
 +		return spec
 +	}
-+	// 查不到型号时 fail-closed：宁可少显示，也不能给固定机 / 门铃
-+	// 显示一个按了没反应的方向盘。
++	spec.Supported = true
++	spec.PTZCapable = true
++	spec.Channel = "miss"
++	spec.Source = "miss"
++	spec.Action = "MISS 0x112 motor"
++	spec.Dirs = ptzDirs
 +	if model == "" {
-+		spec.Note = "流地址里没有型号信息，桌面版按 fail-closed 隐藏方向盘"
++		spec.Note = "流地址里没有型号信息，仍显示方向盘；画面不动说明这台不是云台机或已到角度极限"
 +	} else {
-+		spec.Note = "该型号不在已知云台机型列表中，桌面版按 fail-closed 隐藏方向盘"
++		spec.Note = "型号未单独适配，默认显示方向盘；画面不动说明这台不是云台机或已到角度极限"
 +	}
 +	return spec
 +}
@@ -324,9 +334,10 @@ index 957c9d7..0cd9813 100644
 +
 +	op := ptzStopOp
 +	if move != "stop" {
-+		// 与 /ptz/spec 同一套判定：未知型号不发转动指令。
-+		if !ptzKnown(model) {
-+			writeErr(http.StatusNotImplemented, "该型号不在已知云台机型列表中，不发送云台指令")
++		// 与 /ptz/spec 同一套判定：已知固定机 / 门铃不发转动指令；
++		// 其余型号（包括未收录的新型号）都允许试一次。
++		if ptzFixed(model) {
++			writeErr(http.StatusNotImplemented, "该型号是固定机/门铃，没有云台")
 +			return
 +		}
 +		var ok bool

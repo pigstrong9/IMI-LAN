@@ -19,8 +19,8 @@ package main
 // 命令通道必须「画面正在播」才可用：摄像头只在视频连接里接受这类命令。
 //
 // 桌面版（Electron）不启动网关，由 fpk/patches/xiaomi-control.patch 在 go2rtc
-// 里提供响应结构相同的 /ptz、/ptz/spec；那份实现没有云端接口，只按型号白名单
-// fail-closed，固定机和门铃不会出现方向盘。
+// 里提供响应结构相同的 /ptz、/ptz/spec；那份实现没有云端接口，只按
+// 固定机 / 门铃名单隐藏方向盘，其余型号默认开放命令通道。
 
 import (
 	"encoding/json"
@@ -55,14 +55,20 @@ var ptzDirAliases = map[string][]string{
 // 方向展示顺序：前四个是必需项，斜向只在规格里确实有对应取值时才暴露。
 var ptzDirOrder = []string{"left", "right", "up", "down", "left_up", "right_up", "left_down", "right_down"}
 
-// 已知云台机型。公开规格拿不到（断网 / miot-spec.org 改版）时兜底用，
-// 避免把固定摄像机和门铃也误判成云台机、显示一个按了没反应的方向盘。
-var knownPTZModels = map[string]bool{
-	"chuangmi.camera.061a01": true, // 小米智能摄像机 3 Pro 云台版
-	"chuangmi.camera.81ac1":  true, // 小米智能摄像机 C700
-	"chuangmi.camera.12ab1":  true, // 创米云台机型
-	"xiaovv.camera.q8":       true, // xiaovv 2K 云台
-	"xiaovv.camera.fjcam3":   true, // xiaovv 母婴看护云台
+// 已知没有云台的机型：固定机 + 门铃。策略是 fail-open —— 除了这些明确
+// 没有云台的型号，其余（包括公开规格查不到 / 离线 / 未登录的新型号）都
+// 开放视频连接里的命令通道。新设备不用等代码更新，画面不动就说明不是云台机。
+var knownFixedModels = map[string]bool{
+	"mijia.camera.v3": true, // 米家智能摄像机 1080P（固定机）
+}
+
+// 门铃统一是 madv.cateye.*，电池设备，没有云台。
+func ptzKnownFixed(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return false
+	}
+	return knownFixedModels[m] || strings.HasPrefix(m, "madv.cateye.")
 }
 
 type ptzSpec struct {
@@ -76,8 +82,9 @@ type ptzSpec struct {
 	Note    string         `json:"note,omitempty"`
 	Dirs    []string       `json:"dirs"`
 	DirVals map[string]any `json:"-"`
-	// Supported 只有从公开规格里真解析出云台动作才为 true。
-	// 前端据此决定要不要显示方向盘 —— 盲调云端只会让用户以为坏了。
+	// Supported 在 resolvePtzSpec 里表示「公开规格里有可直接调用的云台动作」；
+	// specWithChannel 发现命令通道可用时也会把它补成 true（含未收录的新型号）。
+	// 前端据此决定要不要显示方向盘。
 	Supported bool `json:"supported"`
 	// PTZCapable 表示该型号本身是云台机（规格里有 ptz 相关属性），
 	// 但公开规格里没有可直接调用的云台动作。
@@ -539,26 +546,27 @@ func specWithChannel(model string, spec *ptzSpec) *ptzSpec {
 	}
 
 	// 规格里没有云台动作 —— 这正是这批摄像机的常态，改走视频连接里的命令通道。
-	// 但只能在「确实是云台机」时才开放：固定摄像机 / 门铃显示一个按了没反应的
-	// 方向盘比不显示更糟，README 也承诺不支持的型号不出现方向盘。
-	capable := out.PTZCapable || knownPTZModels[strings.ToLower(model)]
-	if !capable && model != "" {
+	// 只有「明确知道没有云台」的固定机 / 门铃才隐藏；未收录的新型号默认开放，
+	// 用户不用等代码更新，画面不动就说明不是云台机。
+	if ptzKnownFixed(model) {
 		out.Supported = false
 		out.Channel = ""
 		out.Dirs = nil
 		out.DirVals = nil
-		out.Note = "该型号没有可识别的云台能力，不显示方向盘"
+		out.Note = "该型号是固定机/门铃，没有云台，不显示方向盘"
 		return &out
 	}
-	// 型号查不到时（离线 / 未登录）仍然开放命令通道：
-	// 用户已经打开了这台画面，允许他试一次，画面不动就是不是云台机。
 	out.Channel = "miss"
 	out.Supported = true
 	out.Source = "miss"
 	out.Action = "MISS 0x112 motor"
 	out.Dirs = ptzMissDirs
 	out.DirVals = nil
-	out.Note = "转动命令走视频连接里的命令通道；画面不动说明这台不是云台机或已到角度极限"
+	if model == "" {
+		out.Note = "流地址里没有型号信息，仍显示方向盘；画面不动说明这台不是云台机或已到角度极限"
+	} else {
+		out.Note = "型号未单独适配，默认显示方向盘；画面不动说明这台不是云台机或已到角度极限"
+	}
 	return &out
 }
 

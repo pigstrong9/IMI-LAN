@@ -198,18 +198,30 @@ func TestPtzLooksLikeActionChinese(t *testing.T) {
 	}
 }
 
-// 不支持云台的型号必须 fail closed —— 否则门铃、固定摄像机也会显示方向盘。
+// 已知固定机 / 门铃必须继续隐藏；未收录的新型号默认开放命令通道，
+// 不要求用户等代码更新。
 func TestSpecWithChannelRejectsFixedCamera(t *testing.T) {
-	fixed := &ptzSpec{Model: "mijia.camera.v3", Source: "unsupported"}
-	out := specWithChannel("mijia.camera.v3", fixed)
-	if out.Supported || out.Channel != "" || len(out.Dirs) != 0 {
-		t.Fatalf("固定摄像机不应显示方向盘: %+v", *out)
+	for _, model := range []string{"mijia.camera.v3", "madv.cateye.mi3iot"} {
+		fixed := &ptzSpec{Model: model, Source: "unsupported"}
+		out := specWithChannel(model, fixed)
+		if out.Supported || out.Channel != "" || len(out.Dirs) != 0 {
+			t.Fatalf("%s: 固定机/门铃不应显示方向盘: %+v", model, *out)
+		}
+		if out.Note == "" {
+			t.Fatalf("%s: 应说明为什么隐藏方向盘", model)
+		}
 	}
 
 	// 已知云台机型即使规格没解析出来，也要开放命令通道。
 	ptz := specWithChannel("chuangmi.camera.81ac1", &ptzSpec{Source: "unsupported"})
 	if !ptz.Supported || ptz.Channel != "miss" || len(ptz.Dirs) != 4 {
 		t.Fatalf("已知云台机型应开放命令通道: %+v", *ptz)
+	}
+
+	// 未收录的型号：spec 里没有云台动作，也默认开放命令通道。
+	unknown := specWithChannel("new.brand.camera.x", &ptzSpec{Source: "unsupported"})
+	if !unknown.Supported || unknown.Channel != "miss" || len(unknown.Dirs) != 4 {
+		t.Fatalf("未收录型号应默认开放命令通道: %+v", *unknown)
 	}
 }
 
